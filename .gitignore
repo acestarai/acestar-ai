@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment variables
+.env
+
+# Output files
+output/
+*.mp3
+*.txt
+*.pdf
+
+# System files
+.DS_Store
+.vscode/
+*.log
+
+# Temporary files
+tmp/
+temp/
