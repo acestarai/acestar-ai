@@ -678,17 +678,6 @@ function App() {
                 </button>
               </div>
             </div>
-
-            {/* Warning Message */}
-            <div className="warning">
-              ⚠️ If recording fails, check your BlackHole/Multi-Output routing and device names in Audio MIDI Setup.
-            </div>
-
-            {/* Console Log */}
-            <div className="log-section">
-              <h3 style={{ marginBottom: '12px', fontSize: '14px', fontWeight: '600' }}>Console Output</h3>
-              <div className="log">{log}</div>
-            </div>
           </div>
         </div>
 
