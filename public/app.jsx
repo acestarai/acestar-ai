@@ -535,23 +535,7 @@ function App() {
         </div>
 
         {/* Main Panel */}
-        <div
-          className={`main-panel drop-zone ${isDragging ? 'dragging' : ''}`}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-        >
-          {isDragging && (
-            <div className="drop-overlay">
-              <div className="drop-message">
-                <div className="drop-icon">📁</div>
-                <div className="drop-text">Drop audio file here</div>
-                <div className="drop-subtext">Supports MP3, M4A, and WAV files</div>
-              </div>
-            </div>
-          )}
-          
+        <div className="main-panel">
           <div className="panel-header">
             <h2>Meeting Recording & Analysis</h2>
             <p className="panel-subtitle">Record/Upload, Transcribe and Summarize your meetings</p>
@@ -562,13 +546,28 @@ function App() {
             <div className="card">
               <h3>Audio Input</h3>
               <div className="button-group">
-                <button
-                  className="secondary"
-                  onClick={() => document.getElementById('audio-upload').click()}
-                  disabled={busy || recording}
+                <div
+                  className={`upload-drop-zone ${isDragging ? 'dragging' : ''}`}
+                  onDragEnter={handleDragEnter}
+                  onDragLeave={handleDragLeave}
+                  onDragOver={handleDragOver}
+                  onDrop={handleDrop}
                 >
-                  📁 Upload Audio
-                </button>
+                  {isDragging && (
+                    <div className="drop-overlay-button">
+                      <div className="drop-message-button">
+                        📁 Drop here
+                      </div>
+                    </div>
+                  )}
+                  <button
+                    className="secondary"
+                    onClick={() => document.getElementById('audio-upload').click()}
+                    disabled={busy || recording}
+                  >
+                    📁 Upload Audio
+                  </button>
+                </div>
                 <input
                   id="audio-upload"
                   type="file"

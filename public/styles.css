@@ -104,25 +104,6 @@ body:not(.dark-mode) .modal-header {
   border-bottom: 1px solid #e0e0e0;
 }
 
-body:not(.dark-mode) .drop-overlay {
-  background: rgba(255, 255, 255, 0.95);
-}
-
-body:not(.dark-mode) .drop-message {
-  color: #161616;
-  border-color: #0f62fe;
-}
-
-body:not(.dark-mode) .keyboard-shortcuts {
-  background: rgba(15, 98, 254, 0.05);
-  color: #161616;
-  border-color: #0f62fe;
-}
-
-body:not(.dark-mode) .keyboard-shortcuts strong {
-  color: #0f62fe;
-}
-
 /* Modal Overlay */
 .modal-overlay {
   position: fixed;
@@ -1411,20 +1392,26 @@ body:not(.dark-mode) .theme-toggle:hover {
   transform: scale(1.05);
 }
 
-/* Drag and Drop Overlay */
-.drop-overlay {
-  position: fixed;
+/* Upload Drop Zone - Only over Upload Button */
+.upload-drop-zone {
+  position: relative;
+  display: inline-block;
+}
+
+.drop-overlay-button {
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(22, 22, 22, 0.95);
+  background: rgba(15, 98, 254, 0.95);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 2000;
-  backdrop-filter: blur(8px);
+  z-index: 10;
+  border-radius: 4px;
   animation: fadeIn 0.2s ease;
+  pointer-events: none;
 }
 
 @keyframes fadeIn {
@@ -1436,17 +1423,12 @@ body:not(.dark-mode) .theme-toggle:hover {
   }
 }
 
-.drop-message {
+.drop-message-button {
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
   text-align: center;
-  padding: 40px;
-  border: 3px dashed #0f62fe;
-  border-radius: 12px;
-  background: rgba(15, 98, 254, 0.1);
-  color: #f4f4f4;
-  font-size: 24px;
-  font-weight: 500;
-  max-width: 500px;
-  animation: pulse 2s ease-in-out infinite;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes pulse {
@@ -1454,52 +1436,22 @@ body:not(.dark-mode) .theme-toggle:hover {
     transform: scale(1);
   }
   50% {
-    transform: scale(1.05);
+    transform: scale(1.1);
   }
 }
 
-.drop-message svg {
-  width: 64px;
-  height: 64px;
-  margin-bottom: 16px;
-  color: #0f62fe;
+.upload-drop-zone.dragging button {
+  border-color: #0f62fe;
+  box-shadow: 0 0 0 3px rgba(15, 98, 254, 0.3);
 }
 
-/* Keyboard Shortcuts Hint */
-.keyboard-shortcuts {
-  margin-top: 16px;
-  padding: 12px;
-  background: rgba(15, 98, 254, 0.1);
-  border: 1px solid #0f62fe;
-  border-radius: 6px;
-  font-size: 13px;
-  color: #c6c6c6;
+/* Light mode styling for drop overlay */
+body:not(.dark-mode) .drop-overlay-button {
+  background: rgba(15, 98, 254, 0.95);
 }
 
-body:not(.dark-mode) .keyboard-shortcuts {
-  background: rgba(15, 98, 254, 0.05);
-  color: #525252;
-}
-
-.keyboard-shortcuts strong {
-  color: #0f62fe;
-  font-weight: 600;
-}
-
-.keyboard-shortcuts div {
-  margin: 4px 0;
-}
-
-/* Enhanced Upload Button for Drag-and-Drop */
-.upload-button {
-  position: relative;
-  overflow: hidden;
-}
-
-.upload-button.dragging {
-  background: #0353e9;
-  border-color: #0353e9;
-  transform: scale(1.05);
+body:not(.dark-mode) .drop-message-button {
+  color: #ffffff;
 }
 
 /* Responsive adjustments */
