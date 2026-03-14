@@ -495,40 +495,14 @@ function App() {
       </div>
 
       <div className="main-content">
-        {/* Model Status Bar */}
+        {/* Status Bar with Title and Files */}
         <div className="model-status-bar">
           <div className="status-section">
-            <div className="status-label">Status:</div>
-            <div className={getStatusClass()}>
-              {status}
-            </div>
+            <h2 style={{ margin: 0, fontSize: '1.5rem' }}>Meeting Recording & Analysis</h2>
+            <p className="panel-subtitle" style={{ margin: '4px 0 0 0', fontSize: '0.9rem', opacity: 0.8 }}>Record/Upload, Transcribe and Summarize your meetings</p>
           </div>
           
-          <div className="status-section">
-            <div className="status-label">Transcription:</div>
-            <div className="status-value">
-              {models.transcription?.active || 'Loading...'}
-              {models.transcription?.fallback && (
-                <span className="fallback-indicator" title={`Fallback: ${models.transcription.fallback}`}>
-                  ⚡
-                </span>
-              )}
-            </div>
-          </div>
-          
-          <div className="status-section">
-            <div className="status-label">Summarization:</div>
-            <div className="status-value">
-              {models.summarization?.active || 'Loading...'}
-              {models.summarization?.fallback && (
-                <span className="fallback-indicator" title={`Fallback: ${models.summarization.fallback}`}>
-                  ⚡
-                </span>
-              )}
-            </div>
-          </div>
-          
-          <div className="status-section">
+          <div className="status-section" style={{ marginLeft: 'auto' }}>
             <div className="status-label">Files:</div>
             <div className="status-value">
               <span className={files.audio ? 'file-ready' : 'file-missing'}>Audio {files.audio ? '✓' : '✗'}</span>
@@ -540,10 +514,6 @@ function App() {
 
         {/* Main Panel */}
         <div className="main-panel">
-          <div className="panel-header">
-            <h2>Meeting Recording & Analysis</h2>
-            <p className="panel-subtitle">Record/Upload, Transcribe and Summarize your meetings</p>
-          </div>
 
           <div className="panel-content">
             {/* Recording Controls */}
