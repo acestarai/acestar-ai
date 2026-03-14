@@ -38,9 +38,18 @@ const DIARIZATION_URL = process.env.DIARIZATION_URL || 'http://localhost:5000';
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-// Clear metadata on server startup to reset file status
+// Clear metadata and output files on server startup to reset file status
 if (fs.existsSync(META_PATH)) {
   fs.unlinkSync(META_PATH);
+}
+
+// Clear all files in output directory on startup
+const outputFiles = fs.readdirSync(OUTPUT_DIR);
+for (const file of outputFiles) {
+  const filePath = path.join(OUTPUT_DIR, file);
+  if (fs.statSync(filePath).isFile()) {
+    fs.unlinkSync(filePath);
+  }
 }
 
 const app = express();
@@ -383,6 +392,22 @@ app.get('/api/status', (_req, res) => {
   const transcriptExists = meta.transcriptPath && fs.existsSync(meta.transcriptPath);
   const summaryExists = meta.summaryPath && fs.existsSync(meta.summaryPath);
   
+  // Clean up metadata if files don't exist
+  if (!audioExists || !transcriptExists || !summaryExists) {
+    const cleanedMeta = {
+      audioPath: audioExists ? meta.audioPath : null,
+      transcriptPath: transcriptExists ? meta.transcriptPath : null,
+      summaryPath: summaryExists ? meta.summaryPath : null
+    };
+    
+    // Only update metadata if something changed
+    if (cleanedMeta.audioPath !== meta.audioPath ||
+        cleanedMeta.transcriptPath !== meta.transcriptPath ||
+        cleanedMeta.summaryPath !== meta.summaryPath) {
+      writeMeta(cleanedMeta);
+    }
+  }
+  
   res.json({
     ok: true,
     recording: recordingState,
@@ -402,13 +427,23 @@ app.get('/api/status', (_req, res) => {
   });
 });
 
-// Clear session endpoint - deletes metadata to reset the UI
+// Clear session endpoint - deletes metadata and files to reset the UI
 app.post('/api/clear-session', (_req, res) => {
   try {
     // Delete the metadata file to reset file status
     if (fs.existsSync(META_PATH)) {
       fs.unlinkSync(META_PATH);
     }
+    
+    // Delete all files in output directory
+    const outputFiles = fs.readdirSync(OUTPUT_DIR);
+    for (const file of outputFiles) {
+      const filePath = path.join(OUTPUT_DIR, file);
+      if (fs.statSync(filePath).isFile()) {
+        fs.unlinkSync(filePath);
+      }
+    }
+    
     res.json({ ok: true, message: 'Session cleared successfully' });
   } catch (err) {
     res.status(500).json({ ok: false, error: String(err.message || err) });
