@@ -387,12 +387,13 @@ body.dark-mode .hero-btn-tertiary:hover {
 }
 
 .hero-stat-card {
-  background: var(--ibm-gray-100);
+  background: var(--ibm-gray-20);
   padding: 20px;
   border-radius: 8px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  border: 1px solid var(--ibm-gray-30);
 }
 
 body.dark-mode .hero-stat-card {
@@ -402,8 +403,12 @@ body.dark-mode .hero-stat-card {
 
 .hero-stat-label {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--ibm-gray-70);
   font-weight: 400;
+}
+
+body.dark-mode .hero-stat-label {
+  color: var(--text-secondary);
 }
 
 .hero-stat-value {
@@ -415,8 +420,12 @@ body.dark-mode .hero-stat-card {
 
 .hero-stat-desc {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--ibm-gray-70);
   line-height: 1.4;
+}
+
+body.dark-mode .hero-stat-desc {
+  color: var(--text-secondary);
 }
 
 .hero-video {
