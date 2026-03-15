@@ -1154,6 +1154,25 @@ app.get('/api/download/:type', (req, res) => {
   fs.createReadStream(filePath).pipe(res);
 });
 
+// Serve audio files from output directory
+app.get('/api/audio/:filename', (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const filePath = path.join(OUTPUT_DIR, filename);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ ok: false, error: 'Audio file not found' });
+    }
+    
+    const contentType = mime.lookup(filePath) || 'audio/mpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Accept-Ranges', 'bytes');
+    fs.createReadStream(filePath).pipe(res);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.get('*', (_req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
 });

@@ -529,7 +529,9 @@ function AudioPlayer({ audioFile }) {
   const [showMoreOptions, setShowMoreOptions] = React.useState(false);
   const [playbackRate, setPlaybackRate] = React.useState(1);
 
+  // Extract filename from path and construct audio URL
   const filename = audioFile.split('/').pop();
+  const audioUrl = `/api/audio/${filename}`;
   
   React.useEffect(() => {
     const audio = audioRef.current;
@@ -589,7 +591,7 @@ function AudioPlayer({ audioFile }) {
 
   const handleDownload = () => {
     const link = document.createElement('a');
-    link.href = audioFile;
+    link.href = audioUrl;
     link.download = filename;
     link.click();
     setShowMoreOptions(false);
@@ -612,7 +614,7 @@ function AudioPlayer({ audioFile }) {
       </div>
       <p className="audio-player-subtitle">Play the uploaded file to confirm sound quality before transcription.</p>
 
-      <audio ref={audioRef} src={audioFile} preload="metadata" />
+      <audio ref={audioRef} src={audioUrl} preload="metadata" />
 
       <div className="audio-player-controls">
         <button className="audio-play-button" onClick={togglePlay}>
