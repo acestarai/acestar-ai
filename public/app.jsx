@@ -490,38 +490,191 @@ function UploadTab({ files, busy, setBusy, refresh }) {
       <h1 className="tab-title">Upload audio file</h1>
       <p className="tab-subtitle">Upload meeting recordings in MP3, M4A, or WAV format</p>
 
-      <div
-        className={`upload-drop-zone ${isDragging ? 'dragging' : ''}`}
-        onDragEnter={handleDragEnter}
-        onDragLeave={handleDragLeave}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-      >
-        <div className="upload-icon">📁</div>
-        <h3>Drag and drop your audio file here</h3>
-        <p>or</p>
-        <label className="upload-button">
-          <input
-            type="file"
-            accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/wave"
-            onChange={handleFileUpload}
-            style={{ display: 'none' }}
-            disabled={busy}
-          />
-          <span className="btn-primary">Browse files</span>
-        </label>
-        <p className="upload-hint">Supported formats: MP3, M4A, WAV (max 100MB)</p>
-      </div>
+      {!files.audio ? (
+        <div
+          className={`upload-drop-zone ${isDragging ? 'dragging' : ''}`}
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+        >
+          <div className="upload-icon">📁</div>
+          <h3>Drag and drop your audio file here</h3>
+          <p>or</p>
+          <label className="upload-button">
+            <input
+              type="file"
+              accept=".mp3,.m4a,.wav,audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/wave"
+              onChange={handleFileUpload}
+              style={{ display: 'none' }}
+              disabled={busy}
+            />
+            <span className="btn-primary">Browse files</span>
+          </label>
+          <p className="upload-hint">Supported formats: MP3, M4A, WAV (max 100MB)</p>
+        </div>
+      ) : (
+        <AudioPlayer audioFile={files.audio} />
+      )}
+    </div>
+  );
+}
 
-      {files.audio && (
-        <div className="upload-success">
-          <div className="success-icon">✓</div>
-          <div className="success-text">
-            <div className="success-title">File uploaded successfully</div>
-            <div className="success-filename">{files.audio.split('/').pop()}</div>
+// Audio Player Component
+function AudioPlayer({ audioFile }) {
+  const audioRef = React.useRef(null);
+  const [isPlaying, setIsPlaying] = React.useState(false);
+  const [currentTime, setCurrentTime] = React.useState(0);
+  const [duration, setDuration] = React.useState(0);
+  const [volume, setVolume] = React.useState(1);
+  const [showVolumeSlider, setShowVolumeSlider] = React.useState(false);
+  const [showMoreOptions, setShowMoreOptions] = React.useState(false);
+  const [playbackRate, setPlaybackRate] = React.useState(1);
+
+  const filename = audioFile.split('/').pop();
+  
+  React.useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const updateTime = () => setCurrentTime(audio.currentTime);
+    const updateDuration = () => setDuration(audio.duration);
+    const handleEnded = () => setIsPlaying(false);
+
+    audio.addEventListener('timeupdate', updateTime);
+    audio.addEventListener('loadedmetadata', updateDuration);
+    audio.addEventListener('ended', handleEnded);
+
+    return () => {
+      audio.removeEventListener('timeupdate', updateTime);
+      audio.removeEventListener('loadedmetadata', updateDuration);
+      audio.removeEventListener('ended', handleEnded);
+    };
+  }, []);
+
+  const togglePlay = () => {
+    const audio = audioRef.current;
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  const handleSeek = (e) => {
+    const audio = audioRef.current;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const percent = (e.clientX - rect.left) / rect.width;
+    audio.currentTime = percent * duration;
+  };
+
+  const handleVolumeChange = (e) => {
+    const newVolume = parseFloat(e.target.value);
+    setVolume(newVolume);
+    audioRef.current.volume = newVolume;
+  };
+
+  const handlePlaybackRateChange = (rate) => {
+    setPlaybackRate(rate);
+    audioRef.current.playbackRate = rate;
+    setShowMoreOptions(false);
+  };
+
+  const handleDownload = () => {
+    const link = document.createElement('a');
+    link.href = audioFile;
+    link.download = filename;
+    link.click();
+    setShowMoreOptions(false);
+  };
+
+  const formatTime = (seconds) => {
+    if (isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  return (
+    <div className="audio-player-container">
+      <div className="audio-player-header">
+        <h3 className="audio-player-title">Native audio preview</h3>
+        <span className="audio-player-status">Ready to review</span>
+      </div>
+      <p className="audio-player-subtitle">Play the uploaded file to confirm sound quality before transcription.</p>
+
+      <audio ref={audioRef} src={audioFile} preload="metadata" />
+
+      <div className="audio-player-controls">
+        <button className="audio-play-button" onClick={togglePlay}>
+          {isPlaying ? '⏸' : '▶'}
+        </button>
+
+        <span className="audio-time">
+          {formatTime(currentTime)} / {formatTime(duration)}
+        </span>
+
+        <div className="audio-progress-container" onClick={handleSeek}>
+          <div className="audio-progress-bar">
+            <div className="audio-progress-fill" style={{ width: `${progress}%` }} />
           </div>
         </div>
-      )}
+
+        <div className="audio-volume-control">
+          <button
+            className="audio-volume-button"
+            onClick={() => setShowVolumeSlider(!showVolumeSlider)}
+          >
+            {volume === 0 ? '🔇' : volume < 0.5 ? '🔉' : '🔊'}
+          </button>
+          {showVolumeSlider && (
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.1"
+              value={volume}
+              onChange={handleVolumeChange}
+              className="audio-volume-slider"
+            />
+          )}
+        </div>
+
+        <div className="audio-more-options">
+          <button
+            className="audio-more-button"
+            onClick={() => setShowMoreOptions(!showMoreOptions)}
+          >
+            ⋮
+          </button>
+          {showMoreOptions && (
+            <div className="audio-options-menu">
+              <div className="audio-options-section">
+                <div className="audio-options-label">Playback speed</div>
+                {[0.5, 0.75, 1, 1.25, 1.5, 2].map(rate => (
+                  <button
+                    key={rate}
+                    className={`audio-option-item ${playbackRate === rate ? 'active' : ''}`}
+                    onClick={() => handlePlaybackRateChange(rate)}
+                  >
+                    {rate}x {playbackRate === rate && '✓'}
+                  </button>
+                ))}
+              </div>
+              <button className="audio-option-item" onClick={handleDownload}>
+                ⬇ Download
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="audio-player-info">
+        Previewing: <strong>{filename}</strong> • {formatTime(duration)} • Uploaded successfully
+      </div>
     </div>
   );
 }

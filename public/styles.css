@@ -873,6 +873,241 @@ body:not(.dark-mode) .upload-drop-zone h3 {
   font-family: 'IBM Plex Mono', monospace;
 }
 
+/* Audio Player */
+.audio-player-container {
+  background: var(--ibm-gray-10);
+  border: 1px solid var(--ibm-gray-20);
+  border-radius: 8px;
+  padding: 24px;
+  margin-top: 24px;
+}
+
+body.dark-mode .audio-player-container {
+  background: var(--ibm-gray-90);
+  border-color: var(--ibm-gray-80);
+}
+
+.audio-player-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.audio-player-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.audio-player-status {
+  background: #d0f0d0;
+  color: #0f5132;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+body.dark-mode .audio-player-status {
+  background: rgba(36, 161, 72, 0.2);
+  color: var(--ibm-green);
+}
+
+.audio-player-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0 0 20px 0;
+}
+
+.audio-player-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background: white;
+  border-radius: 8px;
+  border: 1px solid var(--ibm-gray-20);
+}
+
+body.dark-mode .audio-player-controls {
+  background: var(--ibm-gray-100);
+  border-color: var(--ibm-gray-90);
+}
+
+.audio-play-button {
+  background: var(--ibm-blue);
+  color: white;
+  border: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.audio-play-button:hover {
+  background: #0050e6;
+}
+
+.audio-time {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-family: 'IBM Plex Mono', monospace;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.audio-progress-container {
+  flex: 1;
+  cursor: pointer;
+  padding: 8px 0;
+}
+
+.audio-progress-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--ibm-gray-30);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+body.dark-mode .audio-progress-bar {
+  background: var(--ibm-gray-80);
+}
+
+.audio-progress-fill {
+  height: 100%;
+  background: var(--ibm-blue);
+  border-radius: 3px;
+  transition: width 0.1s linear;
+}
+
+.audio-volume-control {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.audio-volume-button {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.audio-volume-slider {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%) rotate(-90deg);
+  transform-origin: center;
+  margin-bottom: 40px;
+  width: 80px;
+}
+
+.audio-more-options {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.audio-more-button {
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+}
+
+.audio-options-menu {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 8px;
+  background: white;
+  border: 1px solid var(--ibm-gray-20);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 180px;
+  z-index: 100;
+}
+
+body.dark-mode .audio-options-menu {
+  background: var(--ibm-gray-90);
+  border-color: var(--ibm-gray-80);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.audio-options-section {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--ibm-gray-20);
+}
+
+body.dark-mode .audio-options-section {
+  border-bottom-color: var(--ibm-gray-80);
+}
+
+.audio-options-label {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.audio-option-item {
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 10px 16px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background 0.2s;
+}
+
+.audio-option-item:hover {
+  background: var(--ibm-gray-10);
+}
+
+body.dark-mode .audio-option-item:hover {
+  background: var(--ibm-gray-80);
+}
+
+.audio-option-item.active {
+  color: var(--ibm-blue);
+  font-weight: 500;
+}
+
+.audio-player-info {
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.audio-player-info strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 /* File Ready Card */
 .file-ready-card {
   background: var(--ibm-gray-90);
