@@ -245,6 +245,27 @@ function App() {
 function HomeTab({ searchQuery, setSearchQuery, filteredFiles, setActiveTab }) {
   return (
     <div className="home-tab">
+      {/* Hero Section */}
+      <div className="hero-section">
+        <div className="hero-content">
+          <h1 className="hero-title">From meeting chaos to structured documentation in minutes.</h1>
+          <p className="hero-description">
+            Transform your Microsoft Teams meetings into actionable insights. IBM Recap automatically transcribes,
+            summarizes, and organizes your conversations—giving you more time to focus on what matters.
+          </p>
+        </div>
+        <div className="hero-video">
+          <video
+            controls
+            className="demo-video"
+            poster="/video-poster.jpg"
+          >
+            <source src="/ibm-recap-demo.mp4" type="video/mp4" />
+            Your browser does not support the video tag.
+          </video>
+        </div>
+      </div>
+
       <div className="home-header">
         <h1 className="home-title">Recap Center</h1>
         <p className="home-subtitle">A high-level control center that surfaces the next action, recent files, and workflow readiness.</p>

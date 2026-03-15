@@ -269,6 +269,64 @@ body:not(.dark-mode) .tab-button.active {
   gap: 32px;
 }
 
+/* Hero Section */
+.hero-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
+  align-items: center;
+  padding: 48px 0;
+  border-bottom: 1px solid var(--ibm-gray-20);
+  margin-bottom: 32px;
+}
+
+body.dark-mode .hero-section {
+  border-bottom-color: var(--ibm-gray-80);
+}
+
+.hero-content {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.hero-title {
+  font-size: 48px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.hero-description {
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.hero-video {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--ibm-gray-10);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+body.dark-mode .hero-video {
+  background: var(--ibm-gray-90);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.demo-video {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 8px;
+}
+
 .home-header {
   display: flex;
   flex-direction: column;
@@ -1142,6 +1200,20 @@ body:not(.dark-mode) .coming-soon-title {
   .stats-grid {
     grid-template-columns: repeat(2, 1fr);
   }
+  
+  .hero-section {
+    grid-template-columns: 1fr;
+    gap: 32px;
+    padding: 32px 0;
+  }
+  
+  .hero-title {
+    font-size: 36px;
+  }
+  
+  .hero-description {
+    font-size: 16px;
+  }
 }
 
 @media (max-width: 768px) {
@@ -1208,6 +1280,19 @@ body:not(.dark-mode) .coming-soon-title {
   .home-title,
   .tab-title {
     font-size: 24px;
+  }
+  
+  .hero-section {
+    padding: 24px 0;
+    gap: 24px;
+  }
+  
+  .hero-title {
+    font-size: 28px;
+  }
+  
+  .hero-description {
+    font-size: 15px;
   }
 }
 
