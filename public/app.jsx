@@ -268,11 +268,12 @@ function App() {
           homeDashboardRef={homeDashboardRef}
         />}
         
-        {activeTab === 'upload' && <UploadTab 
+        {activeTab === 'upload' && <UploadTab
           files={files}
           busy={busy}
           setBusy={setBusy}
           refresh={refresh}
+          setActiveTab={setActiveTab}
         />}
         
         {activeTab === 'transcribe' && <TranscribeTab
@@ -413,7 +414,7 @@ function HomeTab({ searchQuery, setSearchQuery, filteredFiles, setActiveTab, hom
 }
 
 // Upload Tab Component
-function UploadTab({ files, busy, setBusy, refresh }) {
+function UploadTab({ files, busy, setBusy, refresh, setActiveTab }) {
   const [isDragging, setIsDragging] = useState(false);
 
   const handleDragEnter = (e) => {
