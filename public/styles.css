@@ -618,9 +618,10 @@ body:not(.dark-mode) .search-bar {
   border-color: var(--ibm-gray-30);
 }
 
-.search-icon {
+.search-section .search-icon {
   font-size: 20px;
   color: var(--ibm-gray-40);
+  position: static;
 }
 
 .search-input {
