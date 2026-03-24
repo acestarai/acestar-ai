@@ -11,6 +11,14 @@ import PDFDocument from 'pdfkit';
 import { fileURLToPath } from 'url';
 import { AssemblyAI } from 'assemblyai';
 
+// Import authentication modules
+import authRoutes from './routes/auth.js';
+import { authenticate, optionalAuthenticate } from './auth/middleware.js';
+
+// Import Supabase client and storage utilities
+import { supabase } from './auth/supabase.js';
+import { uploadFile, downloadFile, deleteFile } from './storage/supabase-storage.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
@@ -370,6 +378,15 @@ async function transcribeWithAssemblyAI(audioPath, transcriptOptions, updateProg
     throw error;
   }
 }
+// ============================================
+// AUTHENTICATION ROUTES
+// ============================================
+app.use('/api/auth', authRoutes);
+
+// ============================================
+// PROTECTED API ROUTES
+// ============================================
+
 
 app.get('/api/status', (_req, res) => {
   const meta = readMeta();
@@ -469,12 +486,13 @@ app.get('/api/jobs/:id', (req, res) => {
 });
 
 // Upload audio file endpoint
-app.post('/api/upload-audio', upload.single('audio'), (req, res) => {
+app.post('/api/upload-audio', optionalAuthenticate, upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ ok: false, error: 'No file uploaded' });
     }
 
+    const userId = req.user?.id || 'anonymous';
     const ts = stamp();
     const originalFilename = req.file.originalname;
     // Preserve original file extension
@@ -483,6 +501,35 @@ app.post('/api/upload-audio', upload.single('audio'), (req, res) => {
     
     // Rename uploaded file to proper name with original extension
     fs.renameSync(req.file.path, finalPath);
+    
+    // Upload to Supabase storage
+    try {
+      const uploadResult = await uploadFile(userId, 'audio-files', finalPath, originalFilename);
+      console.log('✅ Audio file uploaded to Supabase:', uploadResult.path);
+      
+      // Track file in database
+      if (userId !== 'anonymous') {
+        try {
+          const fileStats = fs.statSync(finalPath);
+          await supabase
+            .from('files')
+            .insert({
+              user_id: userId,
+              original_filename: originalFilename,
+              file_type: 'audio',
+              storage_path: uploadResult.path,
+              file_size: fileStats.size,
+              mime_type: mime.lookup(originalFilename) || 'audio/mpeg'
+            });
+          console.log('✅ Audio file metadata saved to database');
+        } catch (dbError) {
+          console.error('⚠️ Failed to save file metadata to database:', dbError);
+        }
+      }
+    } catch (uploadError) {
+      console.error('⚠️ Failed to upload to Supabase storage:', uploadError);
+      // Continue anyway - file is still available locally
+    }
     
     // Update metadata with the uploaded file and original filename
     writeMeta({
@@ -578,8 +625,9 @@ app.post('/api/record/stop', (_req, res) => {
   }
 });
 
-app.post('/api/transcribe', async (req, res) => {
+app.post('/api/transcribe', optionalAuthenticate, async (req, res) => {
   try {
+    const userId = req.user?.id || 'anonymous';
     const meta = readMeta();
     const audioPath = req.body?.audioPath || meta.audioPath;
     const transcriptOptions = req.body?.transcriptOptions || { timestamps: true };
@@ -893,6 +941,35 @@ app.post('/api/transcribe', async (req, res) => {
         pdfDoc.end();
         await new Promise((resolve) => pdfStream.on('finish', resolve));
         fs.writeFileSync(transcriptPath, `${lines.join('\n')}\n`, 'utf8');
+        
+        // Upload transcript to Supabase storage
+        try {
+          const uploadResult = await uploadFile(userId, 'transcripts', transcriptPath, path.basename(transcriptPath));
+          console.log('✅ Transcript uploaded to Supabase:', uploadResult.path);
+          
+          // Track file in database
+          if (userId !== 'anonymous') {
+            try {
+              const fileStats = fs.statSync(transcriptPath);
+              await supabase
+                .from('files')
+                .insert({
+                  user_id: userId,
+                  original_filename: path.basename(transcriptPath),
+                  file_type: 'transcript',
+                  storage_path: uploadResult.path,
+                  file_size: fileStats.size,
+                  mime_type: 'text/plain'
+                });
+              console.log('✅ Transcript metadata saved to database');
+            } catch (dbError) {
+              console.error('⚠️ Failed to save transcript metadata to database:', dbError);
+            }
+          }
+        } catch (uploadError) {
+          console.error('⚠️ Failed to upload transcript to Supabase storage:', uploadError);
+        }
+        
         writeMeta({ audioPath, transcriptPath });
 
         updateJob(job.id, {
@@ -919,8 +996,9 @@ app.post('/api/transcribe', async (req, res) => {
   }
 });
 
-app.post('/api/summarize', async (req, res) => {
+app.post('/api/summarize', optionalAuthenticate, async (req, res) => {
   try {
+    const userId = req.user?.id || 'anonymous';
     const customPrompt = req.body?.customPrompt;
 
     const meta = readMeta();
@@ -1018,6 +1096,34 @@ Rules:
 
         updateJob(job.id, { percent: 85, message: 'Writing summary file...' });
         fs.writeFileSync(summaryPath, `${summary}\n`, 'utf8');
+        
+        // Upload summary to Supabase storage
+        try {
+          const uploadResult = await uploadFile(userId, 'summaries', summaryPath, path.basename(summaryPath));
+          console.log('✅ Summary uploaded to Supabase:', uploadResult.path);
+          
+          // Track file in database
+          if (userId !== 'anonymous') {
+            try {
+              const fileStats = fs.statSync(summaryPath);
+              await supabase
+                .from('files')
+                .insert({
+                  user_id: userId,
+                  original_filename: path.basename(summaryPath),
+                  file_type: 'summary',
+                  storage_path: uploadResult.path,
+                  file_size: fileStats.size,
+                  mime_type: 'text/plain'
+                });
+              console.log('✅ Summary metadata saved to database');
+            } catch (dbError) {
+              console.error('⚠️ Failed to save summary metadata to database:', dbError);
+            }
+          }
+        } catch (uploadError) {
+          console.error('⚠️ Failed to upload summary to Supabase storage:', uploadError);
+        }
         
         // Count action items and open questions from the summary
         const actionItemsCount = (summary.match(/## Action items[\s\S]*?(?=##|$)/i)?.[0]?.match(/^[\s]*-/gm) || []).length;
@@ -1134,6 +1240,29 @@ Rules:
     return res.status(500).json({ ok: false, error: String(err.message || err) });
   }
 });
+// Get user's files from database
+app.get('/api/files', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const { data: files, error } = await supabase
+      .from('files')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error('Error fetching files:', error);
+      return res.status(500).json({ ok: false, error: 'Failed to fetch files' });
+    }
+    
+    res.json({ ok: true, files });
+  } catch (err) {
+    console.error('Error in /api/files:', err);
+    res.status(500).json({ ok: false, error: String(err.message || err) });
+  }
+});
+
 
 app.get('/api/download/:type', (req, res) => {
   const type = req.params.type;

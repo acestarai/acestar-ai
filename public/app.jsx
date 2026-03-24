@@ -1,8 +1,9 @@
 const { useEffect, useState } = React;
 
-function App() {
-  // Skip consent/onboarding for now - go straight to main app
-  const [currentPage, setCurrentPage] = useState('main');
+function MainApp() {
+  // Get auth context
+  const { user, logout } = useAuth();
+  const token = null; // Temporarily disabled for testing
   
   // Active tab state
   const [activeTab, setActiveTab] = useState('home');
@@ -12,13 +13,6 @@ function App() {
     const saved = localStorage.getItem('darkMode');
     if (saved !== null) return saved === 'true';
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  });
-  
-  // User state (placeholder for w3 auth)
-  const [user, setUser] = useState({
-    name: 'Asad Mahmood',
-    email: 'asad.mahmood1@ibm.com',
-    avatar: null
   });
   
   // Search and filter state
@@ -71,6 +65,7 @@ function App() {
   const [files, setFiles] = useState({ audio: null, transcript: null, summary: null });
   const [transcribeJob, setTranscribeJob] = useState(null);
   const [summarizeJob, setSummarizeJob] = useState(null);
+  const [showUserMenu, setShowUserMenu] = useState(false);
   
   // Transcription options
   const [transcriptType, setTranscriptType] = useState('standard');
@@ -101,6 +96,18 @@ function App() {
   useEffect(() => {
     localStorage.setItem('fileHistory', JSON.stringify(fileHistory));
   }, [fileHistory]);
+  
+  // Close user menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showUserMenu && !event.target.closest('.user-menu')) {
+        setShowUserMenu(false);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showUserMenu]);
 
   const toggleDarkMode = () => {
     setDarkMode(!darkMode);
@@ -124,10 +131,8 @@ function App() {
   };
   
   useEffect(() => {
-    if (currentPage === 'main') {
-      refresh();
-    }
-  }, [currentPage]);
+    refresh();
+  }, []);
 
   // Filter files based on search
   const filteredFiles = fileHistory.filter(file =>
@@ -181,10 +186,22 @@ function App() {
             {darkMode ? '☀️' : '🌙'} {darkMode ? 'Dark' : 'Light'} mode
           </button>
           <div className="user-menu">
-            <button className="user-button">
+            <button className="user-button" onClick={() => setShowUserMenu(!showUserMenu)}>
               <span className="user-indicator"></span>
-              {user.name} ▼
+              {user.full_name || user.email} ▼
             </button>
+            {showUserMenu && (
+              <div className="user-dropdown">
+                <div className="user-dropdown-header">
+                  <div className="user-dropdown-name">{user.full_name}</div>
+                  <div className="user-dropdown-email">{user.email}</div>
+                </div>
+                <div className="user-dropdown-divider"></div>
+                <button className="user-dropdown-item" onClick={logout}>
+                  <span>🚪</span> Logout
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
@@ -237,7 +254,7 @@ function App() {
               className="demo-video"
               preload="metadata"
             >
-              <source src="https://ibm.box.com/shared/static/d4j12grykjmqoj7cp6zvpxnikrwm9tjo.mp4" type="video/mp4" />
+              <source src="https://mlivtijnumtedtqplnnj.supabase.co/storage/v1/object/public/videos/IBM%20Recap%20demo.mp4" type="video/mp4" />
               Your browser does not support the video tag.
             </video>
           </div>
@@ -461,8 +478,15 @@ function UploadTab({ files, busy, setBusy, refresh, setActiveTab }) {
     
     try {
       setBusy(true);
+      const headers = {};
+      // Get token from localStorage directly to avoid scope issues
+      const authToken = localStorage.getItem('auth_token');
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
       const r = await fetch('/api/upload-audio', {
         method: 'POST',
+        headers: headers,
         body: formData,
       });
       const j = await r.json();
@@ -1020,9 +1044,14 @@ function TranscribeTab({ files, busy, transcribeJob, setTranscribeJob, transcrip
     
     try {
       setBusy(true);
+      const headers = { 'Content-Type': 'application/json' };
+      const authToken = localStorage.getItem('auth_token');
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
       const r = await fetch('/api/transcribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({ transcriptOptions: options }),
       });
       const j = await r.json();
@@ -1285,9 +1314,14 @@ function SummarizeTab({ files, busy, summarizeJob, setSummarizeJob, summaryType,
     
     try {
       setBusy(true);
+      const headers = { 'Content-Type': 'application/json' };
+      const authToken = localStorage.getItem('auth_token');
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
       const r = await fetch('/api/summarize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({ customPrompt: customPrompt || undefined }),
       });
       const j = await r.json();
@@ -1553,6 +1587,42 @@ function getTimeAgo(isoString) {
   return `${diffDays} day${diffDays !== 1 ? 's' : ''} ago`;
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// App wrapper component - handles authentication routing
+function App() {
+  const { user, loading, isAuthenticated } = useAuth();
+  
+  // Show loading state while checking authentication
+  if (loading) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'var(--ibm-gray-100)',
+        color: 'white'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
+          <div>Loading IBM Recap...</div>
+        </div>
+      </div>
+    );
+  }
+  
+  // Show auth page if not authenticated
+  if (!isAuthenticated) {
+    return <AuthPage />;
+  }
+  
+  // Show main app if authenticated
+  return <MainApp />;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <AuthProvider>
+    <App />
+  </AuthProvider>
+);
 
 // Made with Bob
