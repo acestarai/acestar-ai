@@ -1,6 +1,6 @@
 ---
 applications:
-- name: ibm-recap
+- name: acestarai
   memory: 512M
   instances: 1
   buildpack: nodejs_buildpack
@@ -12,6 +12,6 @@ applications:
   env:
     NODE_ENV: production
   services:
-    - ibm-recap-appid
+    - acestarai-appid
 
 # Made with Bob

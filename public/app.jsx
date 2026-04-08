@@ -2,7 +2,7 @@ const { useEffect, useState } = React;
 
 function MainApp() {
   // Get auth context
-  const { user, logout, token } = useAuth();
+  const { user, logout, token, updateAccount } = useAuth();
   
   // Active tab state
   const [activeTab, setActiveTab] = useState('home');
@@ -26,6 +26,9 @@ function MainApp() {
   const [storageUsage, setStorageUsage] = useState(null);
   const [accountLoading, setAccountLoading] = useState(true);
   const [selectedMeetingContext, setSelectedMeetingContext] = useState(null);
+  const [backendModels, setBackendModels] = useState(null);
+  const [pendingCompletionMeetingIds, setPendingCompletionMeetingIds] = useState([]);
+  const autoSyncedTimeZoneRef = React.useRef(false);
   
   // Main app state (from original)
   const [busy, setBusy] = useState(false);
@@ -119,6 +122,11 @@ function MainApp() {
             'Authorization': `Bearer ${token}`
           }
         }));
+        requests.push(fetch('/api/meetings/pending-completion', {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        }));
       }
 
       const responses = await Promise.all(requests);
@@ -129,6 +137,7 @@ function MainApp() {
       const isStopping = !!statusJson.recording?.isStopping;
       setRecording(isRec);
       setStopping(isStopping);
+      setBackendModels(statusJson.models || null);
 
       const normalizedFiles = {
         meetingId: statusJson.files?.meetingId || null,
@@ -173,6 +182,17 @@ function MainApp() {
           setStorageUsage(null);
         }
       }
+
+      if (token && responses[4]) {
+        const pendingResponse = responses[4];
+        const pendingJson = await pendingResponse.json();
+        if (pendingResponse.ok && pendingJson.ok) {
+          setPendingCompletionMeetingIds(pendingJson.meetingIds || []);
+        } else {
+          console.error('Failed to load pending meeting completions:', pendingJson.error);
+          setPendingCompletionMeetingIds([]);
+        }
+      }
     } catch (error) {
       console.error('Refresh failed:', error);
     } finally {
@@ -185,9 +205,36 @@ function MainApp() {
     refresh();
   }, [token]);
 
+  useEffect(() => {
+    if (!token || !accountProfile || autoSyncedTimeZoneRef.current) return;
+
+    const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    if (!browserTimeZone) return;
+    if (accountProfile.timeZone && accountProfile.timeZone !== 'UTC' && accountProfile.timeZone === browserTimeZone) {
+      autoSyncedTimeZoneRef.current = true;
+      return;
+    }
+    if (accountProfile.timeZone && accountProfile.timeZone !== 'UTC' && accountProfile.timeZone !== browserTimeZone) {
+      autoSyncedTimeZoneRef.current = true;
+      return;
+    }
+
+    autoSyncedTimeZoneRef.current = true;
+    updateAccount({ timeZone: browserTimeZone }).catch((error) => {
+      console.error('Failed to sync browser timezone:', error);
+      autoSyncedTimeZoneRef.current = false;
+    });
+  }, [token, accountProfile?.timeZone]);
+
   const historyEntries = buildHistoryEntries(accountFiles);
   const meetingEntries = buildMeetingEntries(accountMeetings);
   const activeMeetingContext = meetingEntries.find((meeting) => meeting.id === files.meetingId) || selectedMeetingContext || null;
+  const completedMeetingCount = meetingEntries.filter((meeting) => !meeting.archivedAt && meeting.lifecycleStatus === 'completed').length;
+  const completedRecordingStats = calculateCompletedRecordingStats(accountMeetings);
+  const averageTurnaroundLabel = formatAverageTurnaround(completedRecordingStats.averageMs);
+  const transcriptAccuracy = calculateTranscriptAccuracy(historyEntries, backendModels);
+  const searchableRecordCount = historyEntries.filter((entry) => ['audio', 'transcript', 'summary'].includes(entry.file_type)).length;
+  const accuracyDescription = buildTranscriptAccuracyDescription(historyEntries, backendModels);
 
   // Filter files based on search
   const filteredMeetings = meetingEntries.filter(file => {
@@ -212,7 +259,7 @@ function MainApp() {
     { id: 'upload', label: 'Upload', icon: '📤' },
     { id: 'transcribe', label: 'Transcribe', icon: '📝' },
     { id: 'summarize', label: 'Summarize', icon: '📊' },
-    { id: 'analytics', label: 'Ask Recap', icon: '💬' }
+    { id: 'analytics', label: 'Ask Acestar', icon: '💬' }
   ];
 
   // Ref for scrolling to home dashboard
@@ -239,9 +286,9 @@ function MainApp() {
       <header className="app-header">
         <div className="header-left">
           <div className="logo-container">
-            <div className="logo-text">
-              <span className="logo-ibm">IBM</span>
-              <span className="logo-recap">Recap</span>
+            <img className="brand-logo-image" src="/assets/acestar-logo" alt="Acestar AI logo" />
+            <div className="brand-wordmark app-wordmark">
+              <span>Acestar AI</span>
             </div>
           </div>
         </div>
@@ -280,10 +327,10 @@ function MainApp() {
           <section className="hero-section-wrapper">
             <div className="hero-section">
               <div className="hero-content">
-                <h1 className="hero-title">From meeting chaos to structured documentation in minutes.</h1>
+                <h1 className="hero-title">From meeting chaos to structured knowledge</h1>
                 <p className="hero-description">
-                  Transform your Microsoft Teams meetings into actionable insights. IBM Recap automatically transcribes,
-                  summarizes, and organizes your conversations—giving you more time to focus on what matters.
+                  Transform meetings into structured, searchable knowledge. Acestar AI provides a meeting intelligence
+                  layer for working professionals craving swifter actions and productivity.
                 </p>
                 
                 {/* Hero Action Buttons */}
@@ -291,11 +338,11 @@ function MainApp() {
                   <button className="hero-btn hero-btn-primary" onClick={scrollToHomeDashboard}>
                     View Home Dashboard
                   </button>
-                  <button className="hero-btn hero-btn-secondary" onClick={() => scrollToTab('upload')}>
-                    Jump to upload flow
+                  <button className="hero-btn hero-btn-secondary" onClick={() => scrollToTab('meetings')}>
+                    Plan Today's Meetings
                   </button>
                   <button className="hero-btn hero-btn-tertiary" onClick={() => scrollToTab('analytics')}>
-                    Preview Ask Recap
+                    Debrief with Ask Acestar
                   </button>
                 </div>
                 
@@ -303,28 +350,30 @@ function MainApp() {
                 <div className="hero-stats">
                   <div className="hero-stat-card">
                     <div className="hero-stat-label">Average turnaround</div>
-                    <div className="hero-stat-value">4.2 min</div>
-                    <div className="hero-stat-desc">Audio → transcript → summary</div>
+                    <div className="hero-stat-value">{averageTurnaroundLabel}</div>
+                    <div className="hero-stat-desc">
+                      {completedRecordingStats.sampleCount > 0
+                        ? `Across ${completedRecordingStats.sampleCount} completed recording${completedRecordingStats.sampleCount === 1 ? '' : 's'}`
+                        : 'No completed recordings yet'}
+                    </div>
                   </div>
                   <div className="hero-stat-card">
                     <div className="hero-stat-label">Transcript accuracy</div>
-                    <div className="hero-stat-value">95%</div>
-                    <div className="hero-stat-desc">With timestamps and speaker ID</div>
+                    <div className="hero-stat-value">{transcriptAccuracy != null ? `${transcriptAccuracy}%` : 'N/A'}</div>
+                    <div className="hero-stat-desc">{accuracyDescription}</div>
                   </div>
                   <div className="hero-stat-card">
                     <div className="hero-stat-label">Searchable records</div>
-                    <div className="hero-stat-value">1,248</div>
-                    <div className="hero-stat-desc">Across Teams and uploads</div>
+                    <div className="hero-stat-value">{formatCompactNumber(searchableRecordCount)}</div>
+                    <div className="hero-stat-desc">
+                      {searchableRecordCount === 1 ? '1 stored artifact in your account' : `${formatCompactNumber(searchableRecordCount)} stored artifacts in your account`}
+                    </div>
                   </div>
                 </div>
               </div>
               <div className="hero-video">
-                <video
-                  controls
-                  className="demo-video"
-                  preload="metadata"
-                >
-                  <source src="https://mlivtijnumtedtqplnnj.supabase.co/storage/v1/object/public/videos/IBM%20Recap%20demo.mp4" type="video/mp4" />
+                <video className="demo-video" controls preload="metadata">
+                  <source src="/ibm-recap-demo.mp4" type="video/mp4" />
                   Your browser does not support the video tag.
                 </video>
               </div>
@@ -362,6 +411,7 @@ function MainApp() {
           setActiveTab={setActiveTab}
           refresh={refresh}
           homeDashboardRef={homeDashboardRef}
+          completedMeetingCount={completedMeetingCount}
         />}
         
         {activeTab === 'upload' && <UploadTab
@@ -378,6 +428,7 @@ function MainApp() {
 
         {activeTab === 'meetings' && <MeetingsTab
           meetingEntries={meetingEntries}
+          pendingCompletionMeetingIds={pendingCompletionMeetingIds}
           historyLoading={historyLoading}
           setActiveTab={setActiveTab}
           onSelectMeetingContext={setSelectedMeetingContext}
@@ -432,7 +483,7 @@ function MainApp() {
 }
 
 // Home Tab Component
-function HomeTab({ searchQuery, setSearchQuery, homeDateFilter, setHomeDateFilter, filteredMeetings, meetingEntries, historyEntries, historyLoading, setActiveTab, refresh, homeDashboardRef }) {
+function HomeTab({ searchQuery, setSearchQuery, homeDateFilter, setHomeDateFilter, filteredMeetings, meetingEntries, historyEntries, historyLoading, setActiveTab, refresh, homeDashboardRef, completedMeetingCount }) {
   const uploadedCount = meetingEntries.length;
   const pendingTranscriptCount = meetingEntries.filter((file) => file.processingStatus !== 'completed' && !file.hasTranscript).length;
   const summaryCount = meetingEntries.filter((file) => file.hasSummary).length;
@@ -474,7 +525,7 @@ function HomeTab({ searchQuery, setSearchQuery, homeDateFilter, setHomeDateFilte
   return (
     <div className="home-tab">
       <div className="home-header" ref={homeDashboardRef}>
-        <h1 className="home-title">Recap Center</h1>
+        <h1 className="home-title">Mission Control</h1>
         <p className="home-subtitle">A high-level control center that surfaces the next action, recent files, and workflow readiness.</p>
         <div className="status-badge">● Ready for processing</div>
       </div>
@@ -482,7 +533,7 @@ function HomeTab({ searchQuery, setSearchQuery, homeDateFilter, setHomeDateFilte
       {/* Stats Cards */}
       <div className="stats-grid">
         <div className="stat-card">
-          <div className="stat-label">Uploaded files</div>
+          <div className="stat-label">Scheduled Meetings</div>
           <div className="stat-value">{uploadedCount}</div>
         </div>
         <div className="stat-card">
@@ -495,9 +546,9 @@ function HomeTab({ searchQuery, setSearchQuery, homeDateFilter, setHomeDateFilte
           <div className="stat-badge">Structured default</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Teams meetings this week</div>
-          <div className="stat-value">27</div>
-          <div className="stat-badge">Calendar synced</div>
+          <div className="stat-label">Completed meetings</div>
+          <div className="stat-value">{completedMeetingCount}</div>
+          <div className="stat-badge">Meetings tab</div>
         </div>
       </div>
 
@@ -1433,7 +1484,7 @@ function HistoryPanel({ title, placeholder, historyEntries, historyLoading, empt
           <div className="recent-upload-card">
             <div className="recent-upload-info">
               <div className="recent-upload-filename">Loading account history...</div>
-              <div className="recent-upload-meta">Fetching files for your IBM Recap account.</div>
+              <div className="recent-upload-meta">Fetching files for your AcestarAI account.</div>
             </div>
           </div>
         ) : filteredEntries.length === 0 ? (
@@ -2044,7 +2095,7 @@ function SummarizeTab({ files, busy, summarizeJob, setSummarizeJob, summaryType,
                   className="btn-secondary-large"
                   onClick={() => setActiveTab('analytics')}
                 >
-                  Continue to Ask Recap
+                  Continue to Ask Acestar
                 </button>
               </>
             )}
@@ -2062,19 +2113,42 @@ function SummarizeTab({ files, busy, summarizeJob, setSummarizeJob, summaryType,
 }
 
 // Meetings Tab Component
-function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMeetingContext, refresh }) {
-  const [meetingSearchQuery, setMeetingSearchQuery] = React.useState('');
-  const [meetingDateFilter, setMeetingDateFilter] = React.useState('all');
-  const [meetingStatusFilter, setMeetingStatusFilter] = React.useState('all');
-  const [showArchivedMeetings, setShowArchivedMeetings] = React.useState(false);
+function MeetingsTab({ meetingEntries, pendingCompletionMeetingIds, historyLoading, setActiveTab, onSelectMeetingContext, refresh }) {
+  const screenshotInputRef = React.useRef(null);
+  const speechRecognitionRef = React.useRef(null);
+  const mediaRecorderRef = React.useRef(null);
+  const mediaStreamRef = React.useRef(null);
+  const mediaChunksRef = React.useRef([]);
+  const dictationBaseTextRef = React.useRef('');
+  const dictationCommittedTextRef = React.useRef('');
+  const [scheduledSearchQuery, setScheduledSearchQuery] = React.useState('');
+  const [completedSearchQuery, setCompletedSearchQuery] = React.useState('');
   const [editingMeetingId, setEditingMeetingId] = React.useState(null);
+  const [notesEditorMeetingId, setNotesEditorMeetingId] = React.useState(null);
+  const [notesEditorMode, setNotesEditorMode] = React.useState('write');
+  const [notesDraft, setNotesDraft] = React.useState('');
+  const [savingNotes, setSavingNotes] = React.useState(false);
+  const [dictationSupported, setDictationSupported] = React.useState(false);
+  const [dictationFallbackSupported, setDictationFallbackSupported] = React.useState(false);
+  const [dictationActive, setDictationActive] = React.useState(false);
+  const [dictationStage, setDictationStage] = React.useState('idle');
+  const [dictationInterimText, setDictationInterimText] = React.useState('');
+  const [dictationChunks, setDictationChunks] = React.useState([]);
   const [savingMeeting, setSavingMeeting] = React.useState(false);
   const [archiveBusyId, setArchiveBusyId] = React.useState(null);
+  const [reviewBusy, setReviewBusy] = React.useState(false);
   const [meetingMessage, setMeetingMessage] = React.useState('');
   const [meetingError, setMeetingError] = React.useState('');
+  const [screenshotBusy, setScreenshotBusy] = React.useState(false);
+  const [screenshotImportBusy, setScreenshotImportBusy] = React.useState(false);
+  const [screenshotFileNames, setScreenshotFileNames] = React.useState([]);
+  const [screenshotCandidates, setScreenshotCandidates] = React.useState([]);
+  const [screenshotError, setScreenshotError] = React.useState('');
+  const [screenshotMessage, setScreenshotMessage] = React.useState('');
   const [meetingForm, setMeetingForm] = React.useState({
     title: '',
     meetingStartAt: '',
+    meetingEndAt: '',
     organizerName: '',
     attendeeSummary: '',
     externalMeetingUrl: '',
@@ -2086,6 +2160,7 @@ function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMee
     setMeetingForm({
       title: '',
       meetingStartAt: '',
+      meetingEndAt: '',
       organizerName: '',
       attendeeSummary: '',
       externalMeetingUrl: '',
@@ -2093,29 +2168,87 @@ function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMee
     });
   }, []);
 
-  const allMeetings = meetingEntries || [];
-  const filteredManualMeetings = allMeetings.filter((meeting) => {
-    if (meeting.sourceType !== 'manual') return false;
-    if (!showArchivedMeetings && meeting.archivedAt) return false;
+  const closeNotesEditor = React.useCallback(() => {
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch (error) {
+        console.error('Failed to stop dictation:', error);
+      }
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (error) {
+        console.error('Failed to stop fallback recording:', error);
+      }
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    setDictationActive(false);
+    setDictationStage('idle');
+    setDictationInterimText('');
+    setDictationChunks([]);
+    dictationBaseTextRef.current = '';
+    dictationCommittedTextRef.current = '';
+    setNotesEditorMeetingId(null);
+    setNotesEditorMode('write');
+    setNotesDraft('');
+  }, []);
 
-    const query = meetingSearchQuery.toLowerCase().trim();
-    const searchText = [
+  const allMeetings = (meetingEntries || []).filter((meeting) => !meeting.archivedAt);
+  const pendingCompletionSet = new Set(pendingCompletionMeetingIds || []);
+  const getMeetingSortTimestamp = React.useCallback((meeting) => {
+    const candidates = [
+      meeting.meetingStartAt,
+      meeting.meetingEndAt,
+      meeting.completedAt,
+      meeting.uploadedAt,
+      meeting.createdAt
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      const timestamp = new Date(candidate).getTime();
+      if (!Number.isNaN(timestamp)) {
+        return timestamp;
+      }
+    }
+
+    return 0;
+  }, []);
+  const meetingMatchesQuery = React.useCallback((meeting, query) => {
+    const normalizedQuery = String(query || '').toLowerCase().trim();
+    if (!normalizedQuery) return true;
+
+    const haystack = [
       meeting.filename,
       meeting.organizerName,
       meeting.attendeeSummary,
       meeting.notes,
       meeting.displayDate,
       meeting.statusLabel,
-      meeting.statusNote
+      meeting.statusNote,
+      meeting.sourceType
     ].filter(Boolean).join(' ').toLowerCase();
 
-    const matchesSearch = !query || searchText.includes(query);
-    const matchesDate = matchesDateFilter(meeting.meetingStartAt || meeting.uploadedAt, meetingDateFilter);
-    const matchesStatus = doesMeetingMatchStatusFilter(meeting, meetingStatusFilter);
-    return matchesSearch && matchesDate && matchesStatus;
-  });
-  const visibleMeetings = showArchivedMeetings ? allMeetings : allMeetings.filter((meeting) => !meeting.archivedAt);
-  const recentMeetings = visibleMeetings.slice(0, 8);
+    return haystack.includes(normalizedQuery);
+  }, []);
+
+  const scheduledMeetings = allMeetings
+    .filter((meeting) => (
+      ['scheduled', 'missing', 'failed'].includes(meeting.lifecycleStatus) &&
+      meetingMatchesQuery(meeting, scheduledSearchQuery)
+    ))
+    .sort((a, b) => getMeetingSortTimestamp(b) - getMeetingSortTimestamp(a));
+
+  const completedMeetings = allMeetings
+    .filter((meeting) => (
+      ['completed', 'captured'].includes(meeting.lifecycleStatus) &&
+      meetingMatchesQuery(meeting, completedSearchQuery)
+    ))
+    .sort((a, b) => getMeetingSortTimestamp(b) - getMeetingSortTimestamp(a));
 
   const handleMeetingFieldChange = (field, value) => {
     setMeetingForm((current) => ({
@@ -2124,13 +2257,156 @@ function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMee
     }));
   };
 
+  React.useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    setDictationSupported(Boolean(SpeechRecognition));
+    setDictationFallbackSupported(Boolean(window.MediaRecorder && navigator.mediaDevices?.getUserMedia));
+  }, []);
+
+  React.useEffect(() => () => {
+    if (speechRecognitionRef.current) {
+      try {
+        speechRecognitionRef.current.stop();
+      } catch (error) {
+        console.error('Failed to stop dictation on cleanup:', error);
+      }
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch (error) {
+        console.error('Failed to stop fallback recording on cleanup:', error);
+      }
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+  }, []);
+
+  const handleScreenshotCandidateChange = (index, field, value) => {
+    setScreenshotCandidates((current) => current.map((candidate, candidateIndex) => (
+      candidateIndex === index
+        ? { ...candidate, [field]: value }
+        : candidate
+    )));
+  };
+
+  const handleRemoveScreenshotCandidate = (index) => {
+    setScreenshotCandidates((current) => current.filter((_, candidateIndex) => candidateIndex !== index));
+  };
+
+  const handleScreenshotUpload = async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    try {
+      setScreenshotBusy(true);
+      setScreenshotError('');
+      setScreenshotMessage('');
+      const authToken = localStorage.getItem('auth_token');
+      if (!authToken) {
+        throw new Error('Authentication is required to import meetings from a screenshot.');
+      }
+
+      const uploadedFileNames = [];
+      const extractedCandidateSets = [];
+
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append('screenshot', file);
+        formData.append('timeZone', Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+
+        const response = await fetch('/api/meetings/import-screenshot', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${authToken}`
+          },
+          body: formData
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || `Failed to parse ${file.name}.`);
+        }
+
+        uploadedFileNames.push(data.fileName || file.name);
+        extractedCandidateSets.push((data.meetings || []).map((meeting) => ({
+          ...meeting,
+          confidence: Number(meeting.confidence || 0.5)
+        })));
+      }
+
+      const mergedCandidates = mergeScreenshotCandidateSets([
+        screenshotCandidates,
+        ...extractedCandidateSets
+      ]);
+
+      setScreenshotFileNames((current) => [...current, ...uploadedFileNames]);
+      setScreenshotCandidates(mergedCandidates);
+      setScreenshotMessage(
+        mergedCandidates.length
+          ? 'Review the detected meetings below, make any edits you need, and then import them.'
+          : 'No reliable meetings were detected in those screenshots. Try clearer day-view or event-detail captures.'
+      );
+    } catch (error) {
+      setScreenshotError(error.message || 'Failed to parse the screenshot.');
+    } finally {
+      setScreenshotBusy(false);
+      if (event.target) {
+        event.target.value = '';
+      }
+    }
+  };
+
+  const handleConfirmScreenshotImport = async () => {
+    try {
+      setScreenshotImportBusy(true);
+      setScreenshotError('');
+      setScreenshotMessage('');
+      const authToken = localStorage.getItem('auth_token');
+      if (!authToken) {
+        throw new Error('Authentication is required to import meetings.');
+      }
+
+      const response = await fetch('/api/meetings/import-screenshot/confirm', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+          meetings: screenshotCandidates.map((meeting) => ({
+            ...meeting,
+            confidence: undefined
+          }))
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to import screenshot meetings.');
+      }
+
+      await refresh();
+      setScreenshotCandidates([]);
+      setScreenshotFileNames([]);
+      setScreenshotMessage(data.message || 'Meetings imported from the screenshot.');
+    } catch (error) {
+      setScreenshotError(error.message || 'Failed to import screenshot meetings.');
+    } finally {
+      setScreenshotImportBusy(false);
+    }
+  };
+
   const handleEditMeeting = (meeting) => {
+    closeNotesEditor();
     setEditingMeetingId(meeting.id);
     setMeetingMessage('');
     setMeetingError('');
     setMeetingForm({
       title: meeting.filename || '',
       meetingStartAt: meeting.meetingStartAt ? toDateTimeLocalValue(meeting.meetingStartAt) : '',
+      meetingEndAt: meeting.meetingEndAt ? toDateTimeLocalValue(meeting.meetingEndAt) : '',
       organizerName: meeting.organizerName || '',
       attendeeSummary: meeting.attendeeSummary || '',
       externalMeetingUrl: meeting.externalMeetingUrl || '',
@@ -2138,12 +2414,27 @@ function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMee
     });
   };
 
+  const openNotesEditor = (meeting, mode = 'write') => {
+    closeNotesEditor();
+    resetMeetingForm();
+    setMeetingMessage('');
+    setMeetingError('');
+    setNotesEditorMeetingId(meeting.id);
+    setNotesEditorMode(mode);
+    setNotesDraft('');
+    setDictationStage('idle');
+    setDictationInterimText('');
+    setDictationChunks([]);
+    dictationBaseTextRef.current = '';
+    dictationCommittedTextRef.current = '';
+  };
+
   const handleUseMeeting = (meeting) => {
     onSelectMeetingContext({
       id: meeting.id,
       title: meeting.filename,
       start: meeting.meetingStartAt || meeting.uploadedAt,
-      end: meeting.meetingStartAt || meeting.uploadedAt,
+      end: meeting.meetingEndAt || meeting.meetingStartAt || meeting.uploadedAt,
       organizer: meeting.organizerName || 'Organizer not set'
     });
     setActiveTab('upload');
@@ -2179,6 +2470,308 @@ function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMee
     }
   };
 
+  const handleRunTodaysReview = async () => {
+    try {
+      setReviewBusy(true);
+      setMeetingMessage('');
+      setMeetingError('');
+      const authToken = localStorage.getItem('auth_token');
+      if (!authToken) {
+        throw new Error('Authentication is required to run the day review.');
+      }
+
+      const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const targetDate = getLocalDateKeyForBrowser(timeZone, new Date());
+      const response = await fetch('/api/meetings/end-of-day-review', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          timeZone,
+          targetDate
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to run today\'s meeting review.');
+      }
+
+      await refresh();
+      setMeetingMessage(
+        `Today's review is up to date. ${data.summary?.captured || 0} captured, ${data.summary?.completed || 0} completed, ${data.summary?.missing || 0} missing.`
+      );
+    } catch (error) {
+      setMeetingError(error.message || 'Failed to run today\'s meeting review.');
+    } finally {
+      setReviewBusy(false);
+    }
+  };
+
+  const handleDeleteMeeting = async (meeting) => {
+    try {
+      setMeetingMessage('');
+      setMeetingError('');
+      const authToken = localStorage.getItem('auth_token');
+      if (!authToken) {
+        throw new Error('Authentication is required to remove meetings from the schedule.');
+      }
+
+      const confirmed = window.confirm(`Remove "${meeting.filename}" from your schedule?`);
+      if (!confirmed) {
+        return;
+      }
+
+      const response = await fetch(`/api/meetings/${meeting.id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${authToken}`
+        }
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to delete meeting.');
+      }
+
+      await refresh();
+      setMeetingMessage(data.message || 'Meeting removed from your schedule.');
+    } catch (error) {
+      setMeetingError(error.message || 'Failed to delete meeting.');
+    }
+  };
+
+  const handleSaveNotes = async () => {
+    if (!notesEditorMeetingId) return;
+    const meeting = allMeetings.find((entry) => entry.id === notesEditorMeetingId);
+    if (!meeting) {
+      setMeetingError('Meeting not found.');
+      return;
+    }
+    const notes = notesDraft.trim();
+    if (!notes) {
+      setMeetingError('Please add some notes before saving.');
+      return;
+    }
+    try {
+      setSavingNotes(true);
+      setMeetingMessage('');
+      setMeetingError('');
+      const authToken = localStorage.getItem('auth_token');
+      if (!authToken) {
+        throw new Error('Authentication is required to complete meetings from notes.');
+      }
+
+      const response = await fetch(`/api/meetings/${meeting.id}/notes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          notes,
+          captureMethod: notesEditorMode === 'record' ? 'dictated_notes' : 'written_notes'
+        })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to complete meeting from notes.');
+      }
+
+      await refresh();
+      closeNotesEditor();
+      setMeetingMessage(
+        notesEditorMode === 'record'
+          ? 'Meeting completed with dictated notes and summarized for Ask Acestar.'
+          : 'Meeting completed with notes and summarized for Ask Acestar.'
+      );
+    } catch (error) {
+      setMeetingError(error.message || 'Failed to complete meeting from notes.');
+    } finally {
+      setSavingNotes(false);
+    }
+  };
+
+  const handleToggleDictation = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (dictationActive && speechRecognitionRef.current) {
+      speechRecognitionRef.current.stop();
+      return;
+    }
+    if (dictationActive && mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      return;
+    }
+
+    if (!SpeechRecognition) {
+      handleFallbackDictationRecording();
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => {
+      setMeetingError('');
+      setDictationActive(true);
+      setDictationStage('listening');
+      setDictationInterimText('');
+      dictationBaseTextRef.current = notesDraft.trim();
+      dictationCommittedTextRef.current = '';
+    };
+
+    recognition.onresult = (event) => {
+      let interimTranscript = '';
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const transcript = event.results[index][0]?.transcript || '';
+        if (event.results[index].isFinal) {
+          const cleanedTranscript = transcript.trim();
+          if (cleanedTranscript) {
+            setDictationChunks((current) => [...current, cleanedTranscript]);
+            dictationCommittedTextRef.current = [dictationCommittedTextRef.current, cleanedTranscript].filter(Boolean).join(' ').trim();
+          }
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      setDictationInterimText(interimTranscript.trim());
+      const nextDraft = [
+        dictationBaseTextRef.current,
+        dictationCommittedTextRef.current,
+        interimTranscript.trim()
+      ].filter(Boolean).join(' ').trim();
+      setNotesDraft(nextDraft);
+    };
+
+    recognition.onerror = (event) => {
+      setDictationActive(false);
+      setDictationStage('idle');
+      setDictationInterimText('');
+      setMeetingError(event.error === 'not-allowed'
+        ? 'Microphone access was blocked. Please allow microphone access to record a note.'
+        : 'Dictation stopped unexpectedly. Please try again.');
+    };
+
+    recognition.onend = () => {
+      setDictationActive(false);
+      setDictationStage('idle');
+      setDictationInterimText('');
+      const finalDraft = [
+        dictationBaseTextRef.current,
+        dictationCommittedTextRef.current
+      ].filter(Boolean).join(' ').trim();
+      setNotesDraft(finalDraft);
+    };
+
+    speechRecognitionRef.current = recognition;
+    recognition.start();
+  };
+
+  const handleFallbackDictationRecording = async () => {
+    if (!dictationFallbackSupported) {
+      setMeetingError('Dictation is not supported in this browser.');
+      return;
+    }
+
+    try {
+      setMeetingError('');
+      setDictationStage('listening');
+      setDictationInterimText('');
+      mediaChunksRef.current = [];
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      const mimeTypeCandidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4'
+      ];
+      const mimeType = mimeTypeCandidates.find((candidate) => window.MediaRecorder.isTypeSupported?.(candidate)) || '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      mediaRecorderRef.current = recorder;
+
+      recorder.onstart = () => {
+        setDictationActive(true);
+      };
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          mediaChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onerror = () => {
+        setDictationActive(false);
+        setDictationStage('idle');
+        setMeetingError('Recording the dictated note failed. Please try again.');
+      };
+
+      recorder.onstop = async () => {
+        setDictationActive(false);
+
+        const recordedChunks = mediaChunksRef.current || [];
+        mediaChunksRef.current = [];
+
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+          mediaStreamRef.current = null;
+        }
+
+        if (!recordedChunks.length) {
+          setDictationStage('idle');
+          return;
+        }
+
+        try {
+          setDictationStage('transcribing');
+          const blobType = recorder.mimeType || 'audio/webm';
+          const extension = blobType.includes('mp4') ? 'm4a' : blobType.includes('ogg') ? 'ogg' : 'webm';
+          const audioBlob = new Blob(recordedChunks, { type: blobType });
+          const file = new File([audioBlob], `dictated-note.${extension}`, { type: blobType });
+          const formData = new FormData();
+          formData.append('audio', file);
+
+          const authToken = localStorage.getItem('auth_token');
+          if (!authToken) {
+            throw new Error('Authentication is required to transcribe a dictated note.');
+          }
+
+          const response = await fetch('/api/meetings/dictate/transcribe', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${authToken}`
+            },
+            body: formData
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) {
+            throw new Error(data.error || 'Failed to transcribe dictated note.');
+          }
+
+          const transcript = String(data.transcript || '').trim();
+          if (transcript) {
+            setDictationChunks((current) => [...current, transcript]);
+            setNotesDraft((current) => [current.trim(), transcript].filter(Boolean).join(' ').trim());
+          }
+          setDictationStage('idle');
+        } catch (error) {
+          setDictationStage('idle');
+          setMeetingError(error.message || 'Failed to transcribe dictated note.');
+        }
+      };
+
+      recorder.start();
+    } catch (error) {
+      setDictationActive(false);
+      setDictationStage('idle');
+      setMeetingError(error.message || 'Microphone access is required to record a note.');
+    }
+  };
+
   const handleSaveMeeting = async (event) => {
     event.preventDefault();
     setSavingMeeting(true);
@@ -2199,7 +2792,10 @@ function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMee
           'Content-Type': 'application/json',
           Authorization: `Bearer ${authToken}`
         },
-        body: JSON.stringify(meetingForm)
+        body: JSON.stringify({
+          ...meetingForm,
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+        })
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
@@ -2223,55 +2819,212 @@ function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMee
           <div>
             <h1 className="tab-title">Meetings</h1>
             <p className="tab-subtitle">
-              Use this as a manual meeting workspace. Capture the meeting context first, then pass that meeting into
-              Upload, Transcribe, and Summarize when you have the recording or transcript ready.
+              Import each day’s meetings from Outlook screenshots, then complete them with recordings or notes as the day moves forward.
             </p>
           </div>
-          <button className="btn-teams-secondary" onClick={() => setActiveTab('upload')}>
-            Open Upload flow
-          </button>
         </div>
       </div>
 
       <div className="record-tab-content">
         <div className="record-left-column">
+          {meetingMessage && <div className="alert alert-success">{meetingMessage}</div>}
+          {meetingError && <div className="alert alert-error">{meetingError}</div>}
+
           <section className="account-panel meetings-compose-panel">
             <div className="meetings-section-header">
               <div>
-                <h2 className="account-section-title">Create meeting workspace</h2>
-                <p className="tab-subtitle">Capture the context now, then attach a recording or transcript later.</p>
+                <h2 className="account-section-title">Import daily meetings from screenshot</h2>
+                <p className="tab-subtitle">Upload one or more day-view or event-detail screenshots, review the merged meeting details, then import them into AcestarAI in one pass.</p>
               </div>
-              {editingMeetingId && (
-                <button className="account-back-button" onClick={resetMeetingForm}>
-                  Cancel edit
-                </button>
-              )}
+              <button
+                className="btn-secondary-large"
+                type="button"
+                onClick={() => screenshotInputRef.current?.click()}
+                disabled={screenshotBusy}
+              >
+                {screenshotBusy ? 'Reading screenshots...' : 'Upload calendar screenshots'}
+              </button>
+              <input
+                ref={screenshotInputRef}
+                type="file"
+                multiple
+                accept="image/png,image/jpeg,image/webp"
+                className="visually-hidden"
+                onChange={handleScreenshotUpload}
+              />
             </div>
 
-            {meetingMessage && <div className="alert alert-success">{meetingMessage}</div>}
-            {meetingError && <div className="alert alert-error">{meetingError}</div>}
+            {screenshotMessage && <div className="alert alert-success">{screenshotMessage}</div>}
+            {screenshotError && <div className="alert alert-error">{screenshotError}</div>}
 
+            <div className="screenshot-import-panel">
+              <div className="screenshot-import-summary">
+                <div className="screenshot-import-title">
+                  {screenshotFileNames.length > 0
+                    ? `${screenshotFileNames.length} screenshot${screenshotFileNames.length === 1 ? '' : 's'} uploaded`
+                    : 'No screenshots uploaded yet'}
+                </div>
+                <div className="file-meta">
+                  {screenshotCandidates.length > 0
+                    ? `${screenshotCandidates.length} meeting${screenshotCandidates.length === 1 ? '' : 's'} detected and ready for review.`
+                    : 'Best results come from a mix of day-view screenshots and event-detail screenshots with visible organizer and attendee information.'}
+                </div>
+              </div>
+
+              {screenshotFileNames.length > 0 && (
+                <div className="screenshot-uploaded-list">
+                  {screenshotFileNames.map((fileName, index) => (
+                    <span key={`${fileName}-${index}`} className="screenshot-uploaded-chip">{fileName}</span>
+                  ))}
+                </div>
+              )}
+
+              {screenshotCandidates.length > 0 && (
+                <div className="screenshot-review-list">
+                  {screenshotCandidates.map((candidate, index) => (
+                    <div key={`candidate-${index}`} className="screenshot-review-card">
+                      <div className="screenshot-review-header">
+                        <div className="screenshot-review-title">Detected meeting {index + 1}</div>
+                        <div className="screenshot-review-meta">
+                          Confidence {Math.round(Number(candidate.confidence || 0) * 100)}%
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <label>Meeting title</label>
+                        <input
+                          type="text"
+                          value={candidate.title || ''}
+                          onChange={(e) => handleScreenshotCandidateChange(index, 'title', e.target.value)}
+                          disabled={screenshotImportBusy}
+                        />
+                      </div>
+
+                      <div className="meetings-form-grid">
+                        <div className="form-group">
+                          <label>Meeting date and time</label>
+                          <input
+                            type="datetime-local"
+                            value={candidate.meetingStartAt ? toDateTimeLocalValue(candidate.meetingStartAt) : ''}
+                            onChange={(e) => handleScreenshotCandidateChange(index, 'meetingStartAt', e.target.value)}
+                            disabled={screenshotImportBusy}
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label>Meeting end time</label>
+                          <input
+                            type="datetime-local"
+                            value={candidate.meetingEndAt ? toDateTimeLocalValue(candidate.meetingEndAt) : ''}
+                            onChange={(e) => handleScreenshotCandidateChange(index, 'meetingEndAt', e.target.value)}
+                            disabled={screenshotImportBusy}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="meetings-form-grid">
+                        <div className="form-group">
+                          <label>Organizer</label>
+                          <input
+                            type="text"
+                            value={candidate.organizerName || ''}
+                            onChange={(e) => handleScreenshotCandidateChange(index, 'organizerName', e.target.value)}
+                            disabled={screenshotImportBusy}
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label>Attendees</label>
+                          <input
+                            type="text"
+                            value={candidate.attendeeSummary || ''}
+                            onChange={(e) => handleScreenshotCandidateChange(index, 'attendeeSummary', e.target.value)}
+                            disabled={screenshotImportBusy}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="meetings-form-actions">
+                        <button
+                          className="account-back-button"
+                          type="button"
+                          onClick={() => handleRemoveScreenshotCandidate(index)}
+                          disabled={screenshotImportBusy}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="meetings-form-actions">
+                    <button
+                      className="btn-primary-large"
+                      type="button"
+                      onClick={handleConfirmScreenshotImport}
+                      disabled={screenshotImportBusy || screenshotCandidates.length === 0}
+                    >
+                      {screenshotImportBusy ? 'Importing...' : 'Import detected meetings'}
+                    </button>
+                    <button
+                      className="btn-secondary-large"
+                      type="button"
+                      onClick={() => {
+                        setScreenshotCandidates([]);
+                        setScreenshotFileNames([]);
+                        setScreenshotMessage('');
+                        setScreenshotError('');
+                      }}
+                      disabled={screenshotImportBusy}
+                    >
+                      Clear review
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {editingMeetingId && (
+          <section className="account-panel meetings-compose-panel">
+            <div className="meetings-section-header">
+              <div>
+                <h2 className="account-section-title">Edit meeting details</h2>
+                <p className="tab-subtitle">Update the schedule or context for the selected meeting before you complete it with a recording or notes.</p>
+              </div>
+            </div>
             <form className="account-form meetings-form" onSubmit={handleSaveMeeting}>
+              <div className="form-group">
+                <label htmlFor="meetingTitle">Meeting title</label>
+                <input
+                  id="meetingTitle"
+                  type="text"
+                  value={meetingForm.title}
+                  onChange={(e) => handleMeetingFieldChange('title', e.target.value)}
+                  placeholder="Client discovery with Acme"
+                  disabled={savingMeeting}
+                />
+              </div>
+
               <div className="meetings-form-grid">
                 <div className="form-group">
-                  <label htmlFor="meetingTitle">Meeting title</label>
-                  <input
-                    id="meetingTitle"
-                    type="text"
-                    value={meetingForm.title}
-                    onChange={(e) => handleMeetingFieldChange('title', e.target.value)}
-                    placeholder="Client discovery with Acme"
-                    disabled={savingMeeting}
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="meetingStartAt">Meeting date and time</label>
+                  <label htmlFor="meetingStartAt">Meeting start time</label>
                   <input
                     id="meetingStartAt"
                     type="datetime-local"
                     value={meetingForm.meetingStartAt}
                     onChange={(e) => handleMeetingFieldChange('meetingStartAt', e.target.value)}
+                    disabled={savingMeeting}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="meetingEndAt">Meeting end time</label>
+                  <input
+                    id="meetingEndAt"
+                    type="datetime-local"
+                    value={meetingForm.meetingEndAt}
+                    onChange={(e) => handleMeetingFieldChange('meetingEndAt', e.target.value)}
                     disabled={savingMeeting}
                   />
                 </div>
@@ -2329,236 +3082,369 @@ function MeetingsTab({ meetingEntries, historyLoading, setActiveTab, onSelectMee
 
               <div className="meetings-form-actions">
                 <button className="btn-primary-large" type="submit" disabled={savingMeeting}>
-                  {savingMeeting ? 'Saving...' : editingMeetingId ? 'Update workspace' : 'Create workspace'}
+                  {savingMeeting ? 'Saving...' : 'Update meeting'}
                 </button>
                 <button className="btn-secondary-large" type="button" onClick={resetMeetingForm} disabled={savingMeeting}>
-                  Reset form
+                  Close editor
                 </button>
               </div>
             </form>
           </section>
+          )}
 
-          <section className="meetings-history-section">
-            <div className="meetings-section-header">
-              <div>
-                <h2 className="section-title">Manual meeting workspaces</h2>
-                <div className="tab-subtitle">Search, filter, archive, and reuse your saved meeting context from here.</div>
+          {notesEditorMeetingId && (() => {
+            const activeNotesMeeting = allMeetings.find((meeting) => meeting.id === notesEditorMeetingId);
+            if (!activeNotesMeeting) return null;
+
+            return (
+              <section className="account-panel meetings-compose-panel">
+                <div className="meetings-section-header">
+                  <div>
+                    <h2 className="account-section-title">{notesEditorMode === 'record' ? 'Record notes' : 'Write notes'}</h2>
+                    <p className="tab-subtitle">
+                      {activeNotesMeeting.filename}
+                      {activeNotesMeeting.meetingStartAt ? ` • ${formatMeetingTimeRange(activeNotesMeeting.meetingStartAt, activeNotesMeeting.meetingEndAt)}` : ''}
+                    </p>
+                  </div>
+                  {notesEditorMode === 'record' && (
+                    <button
+                      className={`btn-secondary-large ${dictationActive ? 'dictation-active-button' : ''}`}
+                      type="button"
+                      onClick={handleToggleDictation}
+                      disabled={(!dictationSupported && !dictationFallbackSupported) || savingNotes || dictationStage === 'transcribing'}
+                      title={dictationSupported
+                        ? 'Start or stop live dictation'
+                        : dictationFallbackSupported
+                          ? 'Start or stop recording a note for backend transcription'
+                          : 'Dictation is not supported in this browser'}
+                    >
+                      {dictationStage === 'transcribing'
+                        ? 'Transcribing...'
+                        : dictationActive
+                          ? 'Stop microphone'
+                          : dictationSupported
+                            ? 'Microphone'
+                            : 'Record voice note'}
+                    </button>
+                  )}
+                </div>
+
+                {notesEditorMode === 'record' && (
+                  <div className="dictation-status-panel">
+                    <div className={`dictation-status-badge ${dictationStage}`}>
+                      <span className="dictation-status-dot" aria-hidden="true" />
+                      {dictationStage === 'listening' && (dictationSupported ? 'Listening live' : 'Recording voice note')}
+                      {dictationStage === 'transcribing' && 'Transcribing note'}
+                      {dictationStage === 'idle' && 'Ready to record'}
+                    </div>
+                    <div className="dictation-status-copy">
+                      {dictationSupported
+                        ? 'Live dictation will stream the transcript directly into the notes editor below.'
+                        : dictationFallbackSupported
+                          ? 'This browser will record a short voice note, send it through the backend transcription stack, and place the returned transcript in the editor below.'
+                          : 'Dictation is not available in this browser.'}
+                    </div>
+                  </div>
+                )}
+
+                <div className="form-group">
+                  <label htmlFor="meetingNotesEditor">
+                    {notesEditorMode === 'record' ? 'Transcribed dictated notes' : 'Meeting notes'}
+                  </label>
+                  <textarea
+                    id="meetingNotesEditor"
+                    rows="12"
+                    value={notesDraft}
+                    onChange={(e) => setNotesDraft(e.target.value)}
+                    placeholder={notesEditorMode === 'record'
+                      ? 'Click the microphone to dictate your note, or type to refine the transcription.'
+                      : 'Type your notes here in paragraphs or bullet points.'}
+                    disabled={savingNotes || dictationStage === 'transcribing'}
+                    className="meeting-notes-editor"
+                  />
+                  <small>
+                    {notesEditorMode === 'record'
+                      ? 'Dictated notes are transcribed into editable text before being saved and summarized.'
+                      : 'You can write in paragraph form or use bullet points. These notes will be summarized for Ask Acestar.'}
+                  </small>
+                </div>
+
+                <div className="meetings-form-actions">
+                  <button className="btn-primary-large" type="button" onClick={handleSaveNotes} disabled={savingNotes}>
+                    {savingNotes ? 'Updating...' : 'Update Notes'}
+                  </button>
+                  <button className="btn-secondary-large" type="button" onClick={closeNotesEditor} disabled={savingNotes}>
+                    Close Editor
+                  </button>
+                </div>
+              </section>
+            );
+          })()}
+        </div>
+
+        <div className="record-right-column">
+          <aside className="meetings-sidepanel">
+            <section className="meetings-sidepanel-section">
+              <div className="meetings-section-header">
+                <div>
+                  <h2 className="section-title">Scheduled Meetings</h2>
+                  <div className="tab-subtitle">Meetings that are scheduled and need a recording or notes</div>
+                </div>
+                <span className="recent-uploads-badge">{scheduledMeetings.length}</span>
               </div>
-              <span className="recent-uploads-badge">{filteredManualMeetings.length} shown</span>
-            </div>
 
-            <div className="meetings-filter-bar">
               <div className="search-container meetings-search-container">
                 <span className="search-icon">🔍</span>
                 <input
                   type="text"
                   className="search-input"
-                  placeholder="Search by title, organizer, attendees, notes, or date"
-                  value={meetingSearchQuery}
-                  onChange={(e) => setMeetingSearchQuery(e.target.value)}
+                  placeholder="Search scheduled meetings"
+                  value={scheduledSearchQuery}
+                  onChange={(e) => setScheduledSearchQuery(e.target.value)}
                 />
               </div>
 
-              <select
-                className="history-filter-select"
-                value={meetingDateFilter}
-                onChange={(e) => setMeetingDateFilter(e.target.value)}
-              >
-                <option value="all">All dates</option>
-                <option value="7d">Last 7 days</option>
-                <option value="30d">Last 30 days</option>
-                <option value="year">This year</option>
-              </select>
+              <div className="meetings-sidepanel-list">
+                {historyLoading ? (
+                  <div className="file-card">
+                    <div className="file-info">
+                      <div className="file-name">Loading scheduled meetings...</div>
+                    </div>
+                  </div>
+                ) : scheduledMeetings.length === 0 ? (
+                  <div className="file-card">
+                    <div className="file-info">
+                      <div className="file-name">No scheduled meetings found</div>
+                      <div className="file-meta">Import a screenshot or adjust the search above.</div>
+                    </div>
+                  </div>
+                ) : scheduledMeetings.map((meeting) => {
+                  const needsCompletion = pendingCompletionSet.has(meeting.id);
 
-              <select
-                className="history-filter-select"
-                value={meetingStatusFilter}
-                onChange={(e) => setMeetingStatusFilter(e.target.value)}
-              >
-                <option value="all">All statuses</option>
-                <option value="workspace_ready">Workspace ready</option>
-                <option value="in_progress">In progress</option>
-                <option value="transcript_ready">Transcript ready</option>
-                <option value="completed">Summary ready</option>
-                <option value="failed">Failed</option>
-              </select>
+                  if (needsCompletion) {
+                    return (
+                      <div key={`scheduled-pending-${meeting.id}`} className="meeting-workspace-card meeting-prompt-card">
+                        <div className="meeting-workspace-top">
+                          <div className="meeting-workspace-icon">⏰</div>
+                          <div className="meeting-workspace-heading">
+                            <div className="meeting-workspace-title-row">
+                              <div className="meeting-workspace-title">{meeting.filename}</div>
+                              <div className="meeting-card-top-actions">
+                                <button className="meeting-card-icon-button" type="button" onClick={() => handleDeleteMeeting(meeting)} title="Cancelled" aria-label="Cancelled">
+                                  <span className="meeting-card-icon-symbol" aria-hidden="true">🗑</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
 
-              <label className="meetings-archive-toggle">
+                        <div className="meeting-card-status-block">
+                          <div className="meeting-card-status-row">
+                            <span className="badge badge-scheduled-card">{meeting.statusLabel}</span>
+                            <div className="meeting-card-time-info">
+                              {meeting.meetingStartAt ? formatMeetingTimeRange(meeting.meetingStartAt, meeting.meetingEndAt) : 'Meeting time not set'}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="meeting-prompt-meta">
+                          {meeting.meetingEndAt && (
+                            <div className="meeting-prompt-chip">Ended {formatDateTimeWithFallback(meeting.meetingEndAt)}</div>
+                          )}
+                          {meeting.organizerName && (
+                            <div className="meeting-prompt-chip">Organizer: {meeting.organizerName}</div>
+                          )}
+                          {meeting.attendeeSummary && (
+                            <div className="meeting-prompt-chip">Attendees: {meeting.attendeeSummary}</div>
+                          )}
+                        </div>
+
+                        <div className="meeting-workspace-details meeting-prompt-details">
+                          <div className="meeting-prompt-note">
+                            Add a recording or notes so Acestar AI can generate the recap and searchable knowledge for this meeting.
+                          </div>
+                        </div>
+
+                        <div className="meeting-workspace-actions meeting-prompt-actions">
+                          <button className="btn-secondary-large" onClick={() => handleEditMeeting(meeting)}>
+                            Edit
+                          </button>
+                          <button className="btn-primary-large" onClick={() => handleUseMeeting(meeting)}>
+                            Upload recording
+                          </button>
+                          <button className="btn-secondary-large" onClick={() => openNotesEditor(meeting, 'write')}>
+                            Write Notes
+                          </button>
+                          <button className="btn-secondary-large" type="button" onClick={() => openNotesEditor(meeting, 'record')}>
+                            Record Note
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={meeting.id} className="meeting-workspace-card">
+                      <div className="meeting-workspace-top">
+                        <div className="meeting-workspace-icon">{meeting.icon}</div>
+                        <div className="meeting-workspace-heading">
+                          <div className="meeting-workspace-title-row">
+                            <div className="meeting-workspace-title">{meeting.filename}</div>
+                            <div className="meeting-card-top-actions">
+                              <button className="meeting-card-icon-button" type="button" onClick={() => handleDeleteMeeting(meeting)} title="Cancelled" aria-label="Cancelled">
+                                <span className="meeting-card-icon-symbol" aria-hidden="true">🗑</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="meeting-card-status-block">
+                        <div className="meeting-card-status-row">
+                          <span className="badge badge-scheduled-card">{meeting.statusLabel}</span>
+                          <div className="meeting-card-time-info">
+                            {meeting.meetingStartAt
+                              ? formatMeetingTimeRange(meeting.meetingStartAt, meeting.meetingEndAt)
+                              : 'Date not set'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="meeting-workspace-details">
+                        <div className="meeting-workspace-row">
+                          <div className="meeting-workspace-label">Meeting details</div>
+                          <div className="meeting-workspace-value">
+                            {meeting.organizerName ? `Organizer: ${meeting.organizerName}` : 'Organizer not set'}
+                            {meeting.attendeeSummary ? ` • Attendees: ${meeting.attendeeSummary}` : ''}
+                          </div>
+                        </div>
+
+                        {meeting.statusNote && (
+                          <div className="meeting-workspace-row">
+                            <div className="meeting-workspace-label">Meeting status</div>
+                            <div className={`meeting-workspace-note ${meeting.statusTone}`}>
+                              {meeting.statusNote}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="meeting-workspace-actions">
+                        <button className="btn-secondary-large" onClick={() => handleEditMeeting(meeting)}>
+                          Edit
+                        </button>
+                        <button className="btn-secondary-large" onClick={() => openNotesEditor(meeting, 'write')}>
+                          Complete with notes
+                        </button>
+                        <button className="btn-primary-large" onClick={() => handleUseMeeting(meeting)}>
+                          Upload
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="meetings-sidepanel-section">
+              <div className="meetings-section-header">
+                <div>
+                  <h2 className="section-title">Completed Meetings</h2>
+                  <div className="tab-subtitle">Meetings with linked notes or recordings.</div>
+                </div>
+                <span className="recent-uploads-badge">{completedMeetings.length}</span>
+              </div>
+
+              <div className="search-container meetings-search-container">
+                <span className="search-icon">🔍</span>
                 <input
-                  type="checkbox"
-                  checked={showArchivedMeetings}
-                  onChange={(e) => setShowArchivedMeetings(e.target.checked)}
+                  type="text"
+                  className="search-input"
+                  placeholder="Search completed meetings"
+                  value={completedSearchQuery}
+                  onChange={(e) => setCompletedSearchQuery(e.target.value)}
                 />
-                Show archived
-              </label>
-            </div>
+              </div>
 
-            <div className="files-list">
-              {historyLoading ? (
-                <div className="file-card">
-                  <div className="file-info">
-                    <div className="file-name">Loading manual meeting workspaces...</div>
-                    <div className="file-meta">Pulling your saved meeting context into the workspace.</div>
-                  </div>
-                </div>
-              ) : filteredManualMeetings.length === 0 ? (
-                <div className="file-card">
-                  <div className="file-info">
-                    <div className="file-name">No manual workspaces match these filters</div>
-                    <div className="file-meta">Adjust the search or create a new workspace above to start from meeting context before you have a file.</div>
-                  </div>
-                </div>
-              ) : filteredManualMeetings.map((meeting) => (
-                <div key={meeting.id} className={`file-card ${meeting.archivedAt ? 'archived-meeting-card' : ''}`}>
-                  <div className="file-icon">{meeting.icon}</div>
-                  <div className="file-info">
-                    <div className="file-name">{meeting.filename}</div>
-                    <div className="file-meta">
-                      {meeting.meetingStartAt ? formatDateWithFallback(meeting.meetingStartAt) : 'Date not set'}
-                      {meeting.organizerName ? ` • ${meeting.organizerName}` : ''}
-                      {meeting.attendeeSummary ? ` • ${meeting.attendeeSummary}` : ''}
+              <div className="meetings-sidepanel-list">
+                {historyLoading ? (
+                  <div className="file-card">
+                    <div className="file-info">
+                      <div className="file-name">Loading completed meetings...</div>
                     </div>
-                    {(meeting.infoChips.length > 0 || meeting.relatedOutputs.length > 0) && (
-                      <div className="meeting-card-secondary-meta">
-                        {meeting.infoChips.join(' • ')}
-                        {meeting.infoChips.length > 0 && meeting.relatedOutputs.length > 0 ? ' • ' : ''}
-                        {meeting.relatedOutputs.length > 0 ? `Outputs: ${meeting.relatedOutputs.join(', ')}` : ''}
-                      </div>
-                    )}
-                    {meeting.notes && (
-                      <div className="meeting-card-notes">
-                        {truncateText(meeting.notes, 180)}
-                      </div>
-                    )}
-                    {meeting.externalMeetingUrl && (
-                      <div className="meeting-card-link-row">
-                        <a href={meeting.externalMeetingUrl} target="_blank" rel="noreferrer" className="meeting-card-link">
-                          Open meeting link
-                        </a>
-                      </div>
-                    )}
-                    {meeting.statusNote && (
-                      <div className={`file-card-status-note ${meeting.statusTone}`}>
-                        {meeting.statusNote}
-                      </div>
-                    )}
                   </div>
-                  <div className="meeting-card-actions">
-                    <button className="btn-secondary-large" onClick={() => handleEditMeeting(meeting)}>
-                      Edit
-                    </button>
-                    {!meeting.archivedAt && (
-                      <button className="btn-primary-large" onClick={() => handleUseMeeting(meeting)}>
-                        Use in Upload
+                ) : completedMeetings.length === 0 ? (
+                  <div className="file-card">
+                    <div className="file-info">
+                      <div className="file-name">No completed meetings yet</div>
+                      <div className="file-meta">Once a meeting has notes or a recording, it will move here.</div>
+                    </div>
+                  </div>
+                ) : completedMeetings.map((meeting) => (
+                  <div key={meeting.id} className="meeting-workspace-card">
+                    <div className="meeting-workspace-top">
+                      <div className="meeting-workspace-icon">{meeting.icon}</div>
+                      <div className="meeting-workspace-heading">
+                        <div className="meeting-workspace-title-row">
+                          <div className="meeting-workspace-title">{meeting.filename}</div>
+                          <span className={`badge ${meeting.statusBadgeClass}`}>{meeting.statusLabel}</span>
+                        </div>
+                        <div className="meeting-workspace-source">
+                          {meeting.captureMethod === 'recording' ? 'Completed with recording' : 'Completed with notes'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="meeting-workspace-details">
+                        <div className="meeting-workspace-row">
+                          <div className="meeting-workspace-label">Meeting details</div>
+                          <div className="meeting-workspace-value">
+                            {meeting.meetingStartAt
+                              ? formatMeetingTimeRange(meeting.meetingStartAt, meeting.meetingEndAt)
+                              : 'Date not set'}
+                            {meeting.organizerName ? ` • ${meeting.organizerName}` : ''}
+                            {meeting.attendeeSummary ? ` • ${meeting.attendeeSummary}` : ''}
+                          </div>
+                      </div>
+
+                      {meeting.relatedOutputs.length > 0 && (
+                        <div className="meeting-workspace-row">
+                          <div className="meeting-workspace-label">Linked outputs</div>
+                          <div className="meeting-workspace-value">{meeting.relatedOutputs.join(', ')}</div>
+                        </div>
+                      )}
+
+                      {meeting.statusNote && (
+                        <div className="meeting-workspace-row">
+                          <div className="meeting-workspace-label">Meeting status</div>
+                          <div className={`meeting-workspace-note ${meeting.statusTone}`}>
+                            {meeting.statusNote}
+                          </div>
+                        </div>
+                      )}
+
+                      {meeting.notes && (
+                        <div className="meeting-workspace-row">
+                          <div className="meeting-workspace-label">Saved notes</div>
+                          <div className="meeting-card-notes">
+                            {truncateText(meeting.notes, 180)}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="meeting-workspace-actions">
+                      <button className="btn-secondary-large" onClick={() => handleEditMeeting(meeting)}>
+                        Edit
                       </button>
-                    )}
-                    <button
-                      className="account-back-button"
-                      disabled={archiveBusyId === meeting.id}
-                      onClick={() => handleArchiveToggle(meeting, meeting.archivedAt ? 'restore' : 'archive')}
-                    >
-                      {archiveBusyId === meeting.id ? 'Saving...' : meeting.archivedAt ? 'Restore' : 'Archive'}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="meetings-history-section">
-            <div className="meetings-section-header">
-              <h2 className="section-title">All meeting records</h2>
-              <button className="account-back-button" onClick={() => setActiveTab('home')}>
-                Open Home history
-              </button>
-            </div>
-
-            <div className="files-list">
-              {historyLoading ? (
-                <div className="file-card">
-                  <div className="file-info">
-                    <div className="file-name">Loading meeting records...</div>
-                    <div className="file-meta">Fetching meeting history for your workspace.</div>
-                  </div>
-                </div>
-              ) : recentMeetings.length === 0 ? (
-                <div className="file-card">
-                  <div className="file-info">
-                    <div className="file-name">No meetings have been processed yet</div>
-                    <div className="file-meta">Upload your first Teams recording to start building a meeting-centered history.</div>
-                  </div>
-                </div>
-              ) : recentMeetings.map((meeting) => (
-                <div key={meeting.id} className="file-card">
-                  <div className="file-icon">
-                    {meeting.status === 'audio' && '🎧'}
-                    {meeting.status === 'transcript' && '📝'}
-                    {meeting.status === 'summary' && '📊'}
-                  </div>
-                  <div className="file-info">
-                    <div className="file-name">{meeting.filename}</div>
-                    <div className="file-meta">
-                      {meeting.fileTypeLabel} • {meeting.displayDate}
-                      {meeting.relatedOutputs.length > 0 && ` • Related outputs: ${meeting.relatedOutputs.join(', ')}`}
+                      <button className="btn-primary-large" onClick={() => handleUseMeeting(meeting)}>
+                        Upload
+                      </button>
                     </div>
-                    {meeting.statusNote && (
-                      <div className={`file-card-status-note ${meeting.statusTone}`}>
-                        {meeting.statusNote}
-                      </div>
-                    )}
                   </div>
-                  <div className="file-status">
-                    <span className={`badge ${meeting.statusBadgeClass}`}>{meeting.statusLabel}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
-
-        <div className="record-right-column">
-          <aside className="intent-panel">
-            <h2 className="intent-title">Meetings workflow</h2>
-
-            <div className="intent-item">
-              <div className="intent-number">1</div>
-              <div className="intent-content">
-                <div className="intent-heading">Create a meeting workspace</div>
-                <div className="intent-description">
-                  Start with title, organizer, date, and notes so the meeting exists in IBM Recap even before the recording arrives.
-                </div>
+                ))}
               </div>
-            </div>
-
-            <div className="intent-item">
-              <div className="intent-number">2</div>
-              <div className="intent-content">
-                <div className="intent-heading">Pass that meeting into Upload</div>
-                <div className="intent-description">
-                  Use the workspace in Upload when you have the recording, whether it comes from Teams, OneDrive, SharePoint, or a local file.
-                </div>
-              </div>
-            </div>
-
-            <div className="intent-item">
-              <div className="intent-number">3</div>
-              <div className="intent-content">
-                <div className="intent-heading">Continue through transcript and summary</div>
-                <div className="intent-description">
-                  Once Upload is done, the existing Transcribe and Summarize tabs continue the workflow with your saved defaults and meeting-linked history.
-                </div>
-              </div>
-            </div>
-
-            <div className="intent-item">
-              <div className="intent-number">4</div>
-              <div className="intent-content">
-                <div className="intent-heading">Add Microsoft connection later if it becomes available</div>
-                <div className="intent-description">
-                  This manual workspace keeps the product useful today while preserving a clean upgrade path for Teams calendar sync later.
-                </div>
-              </div>
-            </div>
+            </section>
           </aside>
         </div>
       </div>
@@ -2573,9 +3459,13 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
   const [defaultSpeakerDiarization, setDefaultSpeakerDiarization] = React.useState(false);
   const [defaultSummaryType, setDefaultSummaryType] = React.useState('standard');
   const [preferredExportFormat, setPreferredExportFormat] = React.useState('pdf');
+  const [timeZone, setTimeZone] = React.useState('UTC');
+  const [morningPlanningEmailEnabled, setMorningPlanningEmailEnabled] = React.useState(true);
+  const [endOfDayDigestEnabled, setEndOfDayDigestEnabled] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [message, setMessage] = React.useState('');
   const [error, setError] = React.useState('');
+  const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
   React.useEffect(() => {
     setFullName(accountProfile?.fullName || user?.full_name || '');
@@ -2583,12 +3473,19 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
     setDefaultSpeakerDiarization(Boolean(accountProfile?.defaultSpeakerDiarization));
     setDefaultSummaryType(accountProfile?.defaultSummaryType || 'standard');
     setPreferredExportFormat(accountProfile?.preferredExportFormat || 'pdf');
+    setTimeZone(accountProfile?.timeZone || browserTimeZone);
+    setMorningPlanningEmailEnabled(accountProfile?.morningPlanningEmailEnabled !== false);
+    setEndOfDayDigestEnabled(accountProfile?.endOfDayDigestEnabled !== false);
   }, [
     accountProfile?.fullName,
     accountProfile?.defaultTranscriptType,
     accountProfile?.defaultSpeakerDiarization,
     accountProfile?.defaultSummaryType,
     accountProfile?.preferredExportFormat,
+    accountProfile?.timeZone,
+    accountProfile?.morningPlanningEmailEnabled,
+    accountProfile?.endOfDayDigestEnabled,
+    browserTimeZone,
     user?.full_name
   ]);
 
@@ -2604,7 +3501,10 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
         defaultTranscriptType,
         defaultSpeakerDiarization,
         defaultSummaryType,
-        preferredExportFormat
+        preferredExportFormat,
+        timeZone,
+        morningPlanningEmailEnabled,
+        endOfDayDigestEnabled
       });
       await refresh();
       setMessage('Account preferences saved successfully.');
@@ -2643,7 +3543,7 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
       <div className="account-tab">
       <div className="account-header">
         <h1 className="tab-title">Account settings</h1>
-        <p className="tab-subtitle">Manage your profile details and monitor storage usage for your IBM Recap workspace.</p>
+        <p className="tab-subtitle">Manage your profile details and monitor storage usage for your AcestarAI workspace.</p>
       </div>
 
       <div className="account-grid">
@@ -2674,7 +3574,7 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
                 readOnly
                 disabled
               />
-              <small>Sign-in email is managed through your IBM Recap account.</small>
+              <small>Sign-in email is managed through your AcestarAI account.</small>
             </div>
 
             <div className="account-meta-grid">
@@ -2696,7 +3596,22 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
 
         <section className="account-panel">
           <h2 className="account-section-title">Workspace defaults</h2>
-          <div className="account-preferences-stack">
+            <div className="account-preferences-stack">
+            <div className="form-group">
+              <label htmlFor="accountTimeZone">Time zone</label>
+              <input
+                id="accountTimeZone"
+                type="text"
+                value={timeZone}
+                onChange={(e) => setTimeZone(e.target.value)}
+                placeholder="America/New_York"
+                disabled={saving || accountLoading}
+              />
+              <small>
+                Used for 8 AM planning reminders and 6 PM daily digests. Browser detected: {browserTimeZone}.
+              </small>
+            </div>
+
             <div className="account-preference-card">
               <div className="account-preference-copy">
                 <div className="account-preference-title">Default transcription mode</div>
@@ -2775,6 +3690,32 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
               </select>
               <small>This preference is stored now and will be used as export choices become configurable across the app.</small>
             </div>
+
+            <label className="account-toggle-row">
+              <div className="account-preference-copy">
+                <div className="account-preference-title">8 AM planning reminder email</div>
+                <div className="account-preference-description">Send a morning reminder to import today’s meetings if nothing has been scheduled yet.</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={morningPlanningEmailEnabled}
+                onChange={(e) => setMorningPlanningEmailEnabled(e.target.checked)}
+                disabled={saving || accountLoading}
+              />
+            </label>
+
+            <label className="account-toggle-row">
+              <div className="account-preference-copy">
+                <div className="account-preference-title">6 PM daily digest email</div>
+                <div className="account-preference-description">Send an end-of-day summary of captured, completed, and missing meetings.</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={endOfDayDigestEnabled}
+                onChange={(e) => setEndOfDayDigestEnabled(e.target.checked)}
+                disabled={saving || accountLoading}
+              />
+            </label>
           </div>
         </section>
 
@@ -2818,7 +3759,7 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
   );
 }
 
-// Ask Recap Tab Component
+// Ask Acestar Tab Component
 function AnalyticsTab({ historyEntries, meetingEntries }) {
   const availableSources = (historyEntries || []).filter((entry) => entry.file_type === 'transcript' || entry.file_type === 'summary');
   const recentSources = availableSources.slice(0, 8);
@@ -2890,7 +3831,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
         const fallbackId = `chat-${Date.now()}`;
         const fallbackChat = {
           id: fallbackId,
-          title: 'New Ask Recap chat',
+          title: 'New Ask Acestar chat',
           scope: 'all',
           messageCount: 1
         };
@@ -2913,7 +3854,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
         });
         const result = await response.json();
         if (!response.ok || !result.ok) {
-          throw new Error(result.error || 'Failed to load Ask Recap chats.');
+          throw new Error(result.error || 'Failed to load Ask Acestar chats.');
         }
 
         if (cancelled) return;
@@ -2926,13 +3867,13 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
               'Authorization': `Bearer ${authToken}`
             },
             body: JSON.stringify({
-              title: 'New Ask Recap chat',
+              title: 'New Ask Acestar chat',
               scope: 'all'
             })
           });
           const createResult = await createResponse.json();
           if (!createResponse.ok || !createResult.ok) {
-            throw new Error(createResult.error || 'Failed to create Ask Recap chat.');
+            throw new Error(createResult.error || 'Failed to create Ask Acestar chat.');
           }
 
           const createdChat = createResult.chat;
@@ -2969,7 +3910,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
         setActiveChatId(hydratedChats[0]?.id || null);
         setMessagesByChat(hydratedMessages);
       } catch (error) {
-        console.error('Failed to hydrate Ask Recap chats:', error);
+        console.error('Failed to hydrate Ask Acestar chats:', error);
       } finally {
         if (!cancelled) {
           setChatLoading(false);
@@ -2999,7 +3940,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
           }
         });
       } catch (error) {
-        console.error('Failed to optimize Ask Recap knowledge:', error);
+        console.error('Failed to optimize Ask Acestar knowledge:', error);
       } finally {
         if (!cancelled) {
           setBackfillBusy(false);
@@ -3064,7 +4005,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
 
   const starterPrompts = [
     'What action items have come up most often across my recent meetings?',
-    'What recurring blockers do you see in federal CE meetings this month?',
+    'What recurring blockers show up across my recent client and team meetings?',
     'Which open questions are still unresolved across the last five summaries?',
     'Summarize the main risks mentioned in the latest client workshop.'
   ];
@@ -3083,7 +4024,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
             'Authorization': `Bearer ${authToken}`
           },
           body: JSON.stringify({
-            title: 'New Ask Recap chat',
+            title: 'New Ask Acestar chat',
             scope: derivedScope
           })
         });
@@ -3092,13 +4033,13 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
           newChatId = result.chat.id;
         }
       } catch (error) {
-        console.error('Failed to create persisted Ask Recap chat:', error);
+        console.error('Failed to create persisted Ask Acestar chat:', error);
       }
     }
 
     const newChat = {
       id: newChatId,
-      title: 'New Ask Recap chat',
+      title: 'New Ask Acestar chat',
       scope: derivedScope,
       messageCount: 1
     };
@@ -3153,7 +4094,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
         body: JSON.stringify({ title: trimmedTitle })
       });
     } catch (error) {
-      console.error('Failed to rename Ask Recap chat:', error);
+      console.error('Failed to rename Ask Acestar chat:', error);
     }
   };
 
@@ -3189,7 +4130,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
         }
       });
     } catch (error) {
-      console.error('Failed to delete Ask Recap chat:', error);
+      console.error('Failed to delete Ask Acestar chat:', error);
     }
   };
 
@@ -3295,7 +4236,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
 
       const result = await response.json();
       if (!response.ok || !result.ok) {
-        throw new Error(result.error || 'Ask Recap query failed.');
+        throw new Error(result.error || 'Ask Acestar query failed.');
       }
 
       const assistantMessage = {
@@ -3331,10 +4272,10 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
           return accumulator;
         }, [])
       };
-      const shouldRetitle = activeChat?.title === 'New Ask Recap chat';
+      const shouldRetitle = activeChat?.title === 'New Ask Acestar chat';
       const nextTitle = shouldRetitle && result.suggestedTitle
         ? result.suggestedTitle
-        : (activeChat?.title || 'New Ask Recap chat');
+        : (activeChat?.title || 'New Ask Acestar chat');
 
       const nextMessagesByChat = {
         ...messagesByChat,
@@ -3369,7 +4310,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
             ? {
                 id: `assistant-error-${Date.now()}`,
                 role: 'assistant',
-                content: error.message || 'Ask Recap could not answer that question yet.',
+                content: error.message || 'Ask Acestar could not answer that question yet.',
                 citations: [],
                 status: 'error'
               }
@@ -3383,7 +4324,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
             ? {
                 id: `assistant-error-${Date.now()}`,
                 role: 'assistant',
-                content: error.message || 'Ask Recap could not answer that question yet.',
+                content: error.message || 'Ask Acestar could not answer that question yet.',
                 citations: [],
                 status: 'error'
               }
@@ -3405,7 +4346,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
               + New chat
             </button>
             {backfillBusy && (
-              <div className="ask-recap-sidebar-note">Optimizing older summaries and transcripts for Ask Recap…</div>
+              <div className="ask-recap-sidebar-note">Optimizing older summaries and transcripts for Ask Acestar…</div>
             )}
           </div>
 
@@ -3504,11 +4445,11 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
           <div className="ask-recap-conversation">
             {chatLoading ? (
               <div className="ask-recap-empty-state">
-                <div className="ask-recap-empty-title">Loading Ask Recap</div>
+                <div className="ask-recap-empty-title">Loading Ask Acestar</div>
               </div>
             ) : chatMessages.length === 0 ? (
               <div className="ask-recap-empty-state">
-                <div className="ask-recap-empty-title">Ask Recap</div>
+                <div className="ask-recap-empty-title">Ask Acestar</div>
                 <div className="ask-recap-empty-prompts">
                   {starterPrompts.map((prompt) => (
                     <button
@@ -3534,7 +4475,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
                             <span />
                           </div>
                           <div className="ask-recap-status-copy">
-                            Ask Recap is {message.status === 'thinking' ? 'thinking' : 'writing'}…
+                            Ask Acestar is {message.status === 'thinking' ? 'thinking' : 'writing'}…
                           </div>
                         </div>
                       ) : (
@@ -3637,7 +4578,7 @@ function AnalyticsTab({ historyEntries, meetingEntries }) {
                   className="ask-recap-send-button"
                   onClick={() => submitPrompt(draftPrompt)}
                   disabled={!draftPrompt.trim() || queryBusy}
-                  aria-label="Send to Ask Recap"
+                  aria-label="Send to Ask Acestar"
                 >
                   {queryBusy ? '…' : '↑'}
                 </button>
@@ -3697,7 +4638,7 @@ function matchesDateFilter(isoString, filter) {
 async function openHistoryEntryInNewWindow(entry, unavailableMessage, options = {}) {
   const previewWindow = window.open('', '_blank');
   if (!previewWindow) {
-    throw new Error('Your browser blocked the new window. Please allow pop-ups for IBM Recap.');
+    throw new Error('Your browser blocked the new window. Please allow pop-ups for AcestarAI.');
   }
 
   previewWindow.document.write('<title>Opening file...</title><p style="font-family:sans-serif;padding:24px;">Opening file...</p>');
@@ -3773,10 +4714,69 @@ function buildHistoryEntries(accountFiles) {
   });
 }
 
+function normalizeCandidateTitleForMerge(title) {
+  return String(title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function chooseMoreCompleteValue(currentValue, nextValue) {
+  if (!nextValue) return currentValue;
+  if (!currentValue) return nextValue;
+  return String(nextValue).length > String(currentValue).length ? nextValue : currentValue;
+}
+
+function buildScreenshotCandidateMergeKey(candidate) {
+  const titleKey = normalizeCandidateTitleForMerge(candidate?.title);
+  const startAt = candidate?.meetingStartAt ? new Date(candidate.meetingStartAt) : null;
+  const startKey = startAt && !Number.isNaN(startAt.getTime())
+    ? `${startAt.getFullYear()}-${startAt.getMonth() + 1}-${startAt.getDate()}-${startAt.getHours()}-${startAt.getMinutes()}`
+    : 'no-time';
+  return `${titleKey}::${startKey}`;
+}
+
+function mergeScreenshotCandidateSets(candidateSets) {
+  const mergedByKey = new Map();
+
+  (candidateSets || []).flat().forEach((candidate) => {
+    if (!candidate?.title) return;
+
+    const key = buildScreenshotCandidateMergeKey(candidate);
+    const existing = mergedByKey.get(key);
+
+    if (!existing) {
+      mergedByKey.set(key, { ...candidate });
+      return;
+    }
+
+    mergedByKey.set(key, {
+      ...existing,
+      title: chooseMoreCompleteValue(existing.title, candidate.title),
+      meetingStartAt: existing.meetingStartAt || candidate.meetingStartAt || '',
+      meetingEndAt: existing.meetingEndAt || candidate.meetingEndAt || existing.meetingStartAt || candidate.meetingStartAt || '',
+      organizerName: chooseMoreCompleteValue(existing.organizerName, candidate.organizerName),
+      attendeeSummary: chooseMoreCompleteValue(existing.attendeeSummary, candidate.attendeeSummary),
+      externalMeetingUrl: chooseMoreCompleteValue(existing.externalMeetingUrl, candidate.externalMeetingUrl),
+      notes: chooseMoreCompleteValue(existing.notes, candidate.notes),
+      confidence: Math.max(Number(existing.confidence || 0), Number(candidate.confidence || 0))
+    });
+  });
+
+  return Array.from(mergedByKey.values()).sort((a, b) => {
+    const aTime = a?.meetingStartAt ? new Date(a.meetingStartAt).getTime() : Number.POSITIVE_INFINITY;
+    const bTime = b?.meetingStartAt ? new Date(b.meetingStartAt).getTime() : Number.POSITIVE_INFINITY;
+    return aTime - bTime;
+  });
+}
+
 function buildMeetingEntries(accountMeetings) {
   return (accountMeetings || []).map((meeting) => {
     const uploadedAt = meeting.meeting_start_at || meeting.uploaded_at || meeting.created_at || new Date().toISOString();
     const processingStatus = meeting.processing_status || 'uploaded';
+    const lifecycleStatus = meeting.status || deriveMeetingLifecycleStatusLabel(meeting);
+    const captureMethod = meeting.capture_method || 'none';
     const hasTranscript = !!meeting.hasTranscript;
     const hasSummary = !!meeting.hasSummary;
     const relatedOutputs = [
@@ -3784,7 +4784,8 @@ function buildMeetingEntries(accountMeetings) {
       hasSummary ? 'Summary' : null
     ].filter(Boolean);
     const infoChips = [
-      formatProcessingStatus(processingStatus),
+      formatMeetingLifecycleStatus(lifecycleStatus),
+      captureMethod !== 'none' ? formatCaptureMethod(captureMethod) : null,
       meeting.speakerDiarization ? 'Speaker diarization' : null,
       meeting.actionItemsCount ? `${meeting.actionItemsCount} action items` : null,
       meeting.artifactCount ? `${meeting.artifactCount} artifacts` : null
@@ -3795,11 +4796,16 @@ function buildMeetingEntries(accountMeetings) {
       filename: meeting.title || normalizeDisplayFilename(meeting.original_filename, 'audio'),
       uploadedAt,
       meetingStartAt: meeting.meeting_start_at || null,
+      meetingEndAt: meeting.meeting_end_at || null,
+      completedAt: meeting.completed_at || null,
+      notifiedPostMeetingAt: meeting.notified_post_meeting_at || null,
+      dismissedPostMeetingAt: meeting.dismissed_post_meeting_at || null,
+      lastLifecycleEvaluatedAt: meeting.last_lifecycle_evaluated_at || null,
       displayDate: formatDate(uploadedAt),
       fileTypeLabel: meeting.source_type === 'teams'
         ? 'Teams meeting'
         : meeting.source_type === 'manual'
-          ? 'Manual meeting workspace'
+          ? 'Scheduled meeting'
           : 'Uploaded meeting',
       sourceType: meeting.source_type || 'upload',
       archivedAt: meeting.archived_at || null,
@@ -3808,11 +4814,13 @@ function buildMeetingEntries(accountMeetings) {
       externalMeetingUrl: meeting.external_meeting_url || null,
       notes: meeting.notes || null,
       processingStatus,
+      lifecycleStatus,
+      captureMethod,
       processingError: meeting.processing_error || null,
       status: deriveStatus({ processing_status: processingStatus, has_summary: hasSummary, has_transcript: hasTranscript }),
-      statusLabel: deriveStatusLabel({ processing_status: processingStatus, has_summary: hasSummary, has_transcript: hasTranscript }),
-      statusTone: deriveProcessingTone(processingStatus),
-      statusBadgeClass: deriveStatusBadgeClass(processingStatus),
+      statusLabel: formatMeetingLifecycleStatus(lifecycleStatus),
+      statusTone: deriveLifecycleTone(lifecycleStatus),
+      statusBadgeClass: deriveLifecycleBadgeClass(lifecycleStatus),
       statusNote: deriveProcessingNote(meeting),
       icon: deriveMeetingIcon(meeting),
       hasTranscript,
@@ -3865,6 +4873,34 @@ function deriveStatusLabel(file) {
   return 'Audio only';
 }
 
+function deriveMeetingLifecycleStatusLabel(meeting) {
+  if (meeting.status) return meeting.status;
+  if (meeting.capture_method === 'written_notes' || meeting.capture_method === 'dictated_notes') return 'completed';
+  if (meeting.capture_method === 'recording') return 'captured';
+  if (meeting.processing_status && meeting.processing_status !== 'uploaded') return 'captured';
+  return 'scheduled';
+}
+
+function formatMeetingLifecycleStatus(status) {
+  const labels = {
+    scheduled: 'Scheduled',
+    completed: 'Completed',
+    captured: 'Captured',
+    missing: 'Incomplete'
+  };
+  return labels[status] || 'Scheduled';
+}
+
+function formatCaptureMethod(captureMethod) {
+  const labels = {
+    recording: 'Recording captured',
+    written_notes: 'Notes captured',
+    dictated_notes: 'Dictated notes',
+    none: 'No capture yet'
+  };
+  return labels[captureMethod] || 'No capture yet';
+}
+
 function formatProcessingStatus(status) {
   const labels = {
     uploaded: 'Uploaded',
@@ -3878,6 +4914,20 @@ function formatProcessingStatus(status) {
   };
 
   return labels[status] || status.replace(/_/g, ' ');
+}
+
+function deriveLifecycleTone(status) {
+  if (status === 'captured') return 'success';
+  if (status === 'completed') return 'info';
+  if (status === 'missing') return 'danger';
+  return 'muted';
+}
+
+function deriveLifecycleBadgeClass(status) {
+  if (status === 'captured') return 'badge-success';
+  if (status === 'completed') return 'badge-info';
+  if (status === 'missing') return 'badge-danger';
+  return 'badge-neutral';
 }
 
 function deriveProcessingTone(status) {
@@ -3896,6 +4946,19 @@ function deriveStatusBadgeClass(status) {
 function deriveProcessingNote(meeting) {
   if (meeting.archived_at || meeting.archivedAt) {
     return 'Archived workspace. Restore it when you want to reuse this meeting context.';
+  }
+  const lifecycleStatus = meeting.status || meeting.lifecycleStatus;
+  if (lifecycleStatus === 'scheduled') {
+    return 'Scheduled for capture. Upload a recording after it ends or complete it with notes.';
+  }
+  if (lifecycleStatus === 'completed') {
+    return 'Completed from notes. Summary and Ask Acestar context are ready even without a recording.';
+  }
+  if (lifecycleStatus === 'captured') {
+    return 'Recording-based capture is linked to this meeting.';
+  }
+  if (lifecycleStatus === 'missing') {
+    return 'This meeting is incomplete because it is still missing a recording, written notes, or a voice note.';
   }
   const status = meeting.processing_status || 'uploaded';
   const sourceType = meeting.source_type || meeting.sourceType;
@@ -3928,20 +4991,17 @@ function deriveProcessingNote(meeting) {
 
 function doesMeetingMatchStatusFilter(meeting, filter) {
   if (filter === 'all') return true;
-  if (filter === 'workspace_ready') {
-    return meeting.sourceType === 'manual' && !meeting.archivedAt && !meeting.hasTranscript && !meeting.hasSummary && meeting.processingStatus === 'uploaded';
-  }
-  if (filter === 'in_progress') {
-    if (meeting.sourceType === 'manual' && !meeting.hasTranscript && !meeting.hasSummary && meeting.processingStatus === 'uploaded') {
-      return false;
-    }
-    return ['converting', 'transcribing', 'summarizing', 'uploaded', 'ready_for_transcription'].includes(meeting.processingStatus);
-  }
-  if (filter === 'transcript_ready') {
-    return meeting.processingStatus === 'transcript_ready';
+  if (filter === 'scheduled') {
+    return meeting.lifecycleStatus === 'scheduled';
   }
   if (filter === 'completed') {
-    return meeting.processingStatus === 'completed';
+    return meeting.lifecycleStatus === 'completed';
+  }
+  if (filter === 'captured') {
+    return meeting.lifecycleStatus === 'captured';
+  }
+  if (filter === 'missing') {
+    return meeting.lifecycleStatus === 'missing';
   }
   if (filter === 'failed') {
     return meeting.processingStatus === 'failed';
@@ -4002,12 +5062,175 @@ function formatDateWithFallback(isoString) {
   return isoString ? formatDate(isoString) : 'Not available';
 }
 
+function formatDateTimeWithFallback(isoString) {
+  if (!isoString) return 'Not available';
+  const value = new Date(isoString);
+  if (Number.isNaN(value.getTime())) return 'Not available';
+  return value.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+}
+
+function formatMeetingTimeRange(startIso, endIso) {
+  if (!startIso && !endIso) return 'Meeting time not set';
+
+  const start = startIso ? new Date(startIso) : null;
+  const end = endIso ? new Date(endIso) : null;
+
+  if (start && !Number.isNaN(start.getTime())) {
+    const startLabel = start.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+
+    if (end && !Number.isNaN(end.getTime())) {
+      const sameDay = start.toDateString() === end.toDateString();
+      const endLabel = end.toLocaleString(undefined, sameDay ? {
+        hour: 'numeric',
+        minute: '2-digit'
+      } : {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      });
+      return `${startLabel} to ${endLabel}`;
+    }
+
+    return startLabel;
+  }
+
+  return formatDateTimeWithFallback(endIso);
+}
+
+function getLocalDateKeyForBrowser(timeZone = 'UTC', date = new Date()) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  return year && month && day ? `${year}-${month}-${day}` : null;
+}
+
 function formatBytes(bytes) {
   const numericBytes = Number(bytes || 0);
   if (numericBytes < 1024) return `${numericBytes} B`;
   if (numericBytes < 1024 * 1024) return `${(numericBytes / 1024).toFixed(1)} KB`;
   if (numericBytes < 1024 * 1024 * 1024) return `${(numericBytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(numericBytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function formatCompactNumber(value) {
+  return new Intl.NumberFormat().format(Number(value || 0));
+}
+
+function calculateCompletedRecordingStats(accountMeetings) {
+  const completedRecordingMeetings = (accountMeetings || []).filter((meeting) => (
+    meeting.capture_method === 'recording' &&
+    meeting.processing_status === 'completed' &&
+    meeting.uploaded_at &&
+    (meeting.completed_at || meeting.updated_at)
+  ));
+
+  const turnaroundDurations = completedRecordingMeetings
+    .map((meeting) => {
+      const start = new Date(meeting.uploaded_at).getTime();
+      const end = new Date(meeting.completed_at || meeting.updated_at).getTime();
+      if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
+        return null;
+      }
+      return end - start;
+    })
+    .filter((duration) => Number.isFinite(duration));
+
+  if (!turnaroundDurations.length) {
+    return { sampleCount: 0, averageMs: 0 };
+  }
+
+  const totalMs = turnaroundDurations.reduce((sum, duration) => sum + duration, 0);
+  return {
+    sampleCount: turnaroundDurations.length,
+    averageMs: Math.round(totalMs / turnaroundDurations.length)
+  };
+}
+
+function formatAverageTurnaround(averageMs) {
+  const numericValue = Number(averageMs || 0);
+  if (!numericValue || numericValue < 0) return '0 min';
+
+  const totalMinutes = numericValue / 60000;
+  if (totalMinutes < 60) {
+    return `${totalMinutes.toFixed(totalMinutes < 10 ? 1 : 0)} min`;
+  }
+
+  const totalHours = totalMinutes / 60;
+  if (totalHours < 24) {
+    return `${totalHours.toFixed(totalHours < 10 ? 1 : 0)} hr`;
+  }
+
+  const totalDays = totalHours / 24;
+  return `${totalDays.toFixed(totalDays < 10 ? 1 : 0)} d`;
+}
+
+function getTranscriptionBaseline(models) {
+  const activeModel = String(models?.transcription?.active || '').toLowerCase();
+  if (activeModel.includes('openai whisper')) return 95;
+  if (activeModel.includes('openrouter whisper')) return 93;
+  if (activeModel.includes('assemblyai')) return 97;
+  return null;
+}
+
+function calculateTranscriptAccuracy(historyEntries, models) {
+  const baseAccuracy = getTranscriptionBaseline(models);
+  const transcriptEntries = (historyEntries || []).filter((entry) => entry.file_type === 'transcript');
+  const diarizedTranscriptCount = transcriptEntries.filter((entry) => entry.speaker_diarization).length;
+
+  if (!transcriptEntries.length) {
+    return baseAccuracy;
+  }
+
+  const standardTranscriptCount = transcriptEntries.length - diarizedTranscriptCount;
+  const standardAccuracy = baseAccuracy || 92;
+  const diarizedAccuracy = Math.min(99, standardAccuracy + 2);
+  const weightedAccuracy = (
+    (standardTranscriptCount * standardAccuracy) +
+    (diarizedTranscriptCount * diarizedAccuracy)
+  ) / transcriptEntries.length;
+
+  return Math.round(weightedAccuracy);
+}
+
+function buildTranscriptAccuracyDescription(historyEntries, models) {
+  const transcriptEntries = (historyEntries || []).filter((entry) => entry.file_type === 'transcript');
+  const diarizedTranscriptCount = transcriptEntries.filter((entry) => entry.speaker_diarization).length;
+  const activeModel = models?.transcription?.active || null;
+  const fallbackModel = models?.transcription?.fallback || null;
+
+  if (!activeModel || activeModel === 'Not Configured') {
+    return 'Configure a transcription provider to measure account accuracy.';
+  }
+
+  if (!transcriptEntries.length) {
+    return fallbackModel
+      ? `Estimated from ${activeModel} with ${fallbackModel} fallback.`
+      : `Estimated from ${activeModel}.`;
+  }
+
+  if (diarizedTranscriptCount > 0) {
+    return `${diarizedTranscriptCount} diarized transcript${diarizedTranscriptCount === 1 ? '' : 's'} processed with ${activeModel}.`;
+  }
+
+  return `${transcriptEntries.length} transcript${transcriptEntries.length === 1 ? '' : 's'} processed with ${activeModel}.`;
 }
 
 // App wrapper component - handles authentication routing
@@ -4027,7 +5250,7 @@ function App() {
       }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: '48px', marginBottom: '16px' }}>⏳</div>
-          <div>Loading IBM Recap...</div>
+          <div>Loading AcestarAI...</div>
         </div>
       </div>
     );

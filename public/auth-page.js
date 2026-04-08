@@ -131,43 +131,44 @@ function AuthPage() {
       setLoading(false);
     }
   }
+
+  function handleGoogleAuth() {
+    window.location.href = '/api/auth/google/start';
+  }
   
   return (
     <div className="auth-page">
       <div className="auth-container">
         {/* Left side - Branding */}
         <div className="auth-branding">
-          <div className="auth-branding-content">
-            <div className="auth-logo">
-              <div className="logo-text">
-                <span>IBM </span>
-                <span className="logo-recap">
-                  Recap
-                  <div className="logo-underline"></div>
-                </span>
-              </div>
+            <div className="auth-branding-content">
+              <div className="auth-logo">
+                <img className="brand-logo-image auth-brand-logo" src="/assets/acestar-logo" alt="Acestar AI logo" />
+                <div className="brand-wordmark">
+                  <span>Acestar AI</span>
+                </div>
             </div>
-            <p className="auth-tagline">Transform your Teams calls into actionable insights</p>
+            <p className="auth-tagline">Transform every meeting into searchable knowledge</p>
             <div className="auth-features">
               <div className="auth-feature">
                 <span className="auth-feature-icon">🎙️</span>
                 <div>
-                  <h3>Upload & Transcribe</h3>
-                  <p>Automatically transcribe your meetings with speaker identification</p>
+                  <h3>Capture Any Meeting</h3>
+                  <p>Bring in recordings, notes, and calendar context from the way you already work.</p>
                 </div>
               </div>
               <div className="auth-feature">
                 <span className="auth-feature-icon">📝</span>
                 <div>
-                  <h3>AI Summaries</h3>
-                  <p>Get structured summaries with action items and key decisions</p>
+                  <h3>Structured Outputs</h3>
+                  <p>Generate transcripts, action items, risks, and decision-ready summaries in minutes.</p>
                 </div>
               </div>
               <div className="auth-feature">
                 <span className="auth-feature-icon">🔒</span>
                 <div>
-                  <h3>Secure & Private</h3>
-                  <p>Your data is encrypted and stored securely in the cloud</p>
+                  <h3>Searchable Knowledge</h3>
+                  <p>Ask questions across your meeting history and recover the details that matter fast.</p>
                 </div>
               </div>
             </div>
@@ -181,20 +182,20 @@ function AuthPage() {
             {mode === 'login' && (
               <div className="auth-form">
                 <h2>Welcome back</h2>
-                <p className="auth-subtitle">Sign in to your IBM Recap account</p>
+                <p className="auth-subtitle">Sign in to Acestar AI</p>
                 
                 {error && <div className="alert alert-error">{error}</div>}
                 
                 <form onSubmit={handleLogin}>
                   <div className="form-group">
-                    <label htmlFor="email">IBM Email</label>
+                    <label htmlFor="email">Email</label>
                     <input
                       type="email"
                       id="email"
                       name="email"
                       value={formData.email}
                       onChange={handleChange}
-                      placeholder="your.name@ibm.com or your.name@us.ibm.com"
+                      placeholder="you@company.com"
                       required
                       disabled={loading}
                       autoFocus
@@ -230,6 +231,15 @@ function AuthPage() {
                     {loading ? 'Signing in...' : 'Sign in'}
                   </button>
                 </form>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-block btn-centered"
+                  onClick={handleGoogleAuth}
+                  disabled={loading}
+                >
+                  Continue with Google
+                </button>
                 
                 <div className="auth-divider">
                   <span>Don't have an account?</span>
@@ -249,10 +259,23 @@ function AuthPage() {
             {mode === 'signup' && (
               <div className="auth-form">
                 <h2>Create your account</h2>
-                <p className="auth-subtitle">Get started with IBM Recap</p>
+                <p className="auth-subtitle">Get started with AcestarAI</p>
                 
                 {error && <div className="alert alert-error">{error}</div>}
                 {success && <div className="alert alert-success">{success}</div>}
+
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-block"
+                  onClick={handleGoogleAuth}
+                  disabled={loading}
+                >
+                  Continue with Google
+                </button>
+
+                <div className="auth-divider">
+                  <span>or create an account with email</span>
+                </div>
                 
                 <form onSubmit={handleSignup}>
                   <div className="form-group">
@@ -270,18 +293,18 @@ function AuthPage() {
                   </div>
                   
                   <div className="form-group">
-                    <label htmlFor="email">IBM Email *</label>
+                    <label htmlFor="email">Email *</label>
                     <input
                       type="email"
                       id="email"
                       name="email"
                       value={formData.email}
                       onChange={handleChange}
-                      placeholder="your.name@ibm.com or your.name@us.ibm.com"
+                      placeholder="you@company.com"
                       required
                       disabled={loading}
                     />
-                    <small>Supported email domains: @ibm.com and @us.ibm.com</small>
+                    <small>Use any work or personal email address you want to manage with AcestarAI.</small>
                   </div>
                   
                   <div className="form-group">
@@ -343,14 +366,14 @@ function AuthPage() {
                 
                 <form onSubmit={handleForgotPassword}>
                   <div className="form-group">
-                    <label htmlFor="email">IBM Email</label>
+                    <label htmlFor="email">Email</label>
                     <input
                       type="email"
                       id="email"
                       name="email"
                       value={formData.email}
                       onChange={handleChange}
-                      placeholder="your.name@ibm.com or your.name@us.ibm.com"
+                      placeholder="you@company.com"
                       required
                       disabled={loading}
                       autoFocus
@@ -445,7 +468,7 @@ function AuthPage() {
           
           {/* Footer */}
           <div className="auth-footer">
-            <p>© 2026 IBM Recap. All rights reserved.</p>
+            <p>© 2026 AcestarAI. All rights reserved.</p>
           </div>
         </div>
       </div>

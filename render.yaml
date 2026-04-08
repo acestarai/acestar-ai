@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: ibm-recap
+    name: acestarai
     env: node
     plan: free
     buildCommand: npm install
@@ -10,6 +10,8 @@ services:
         value: production
       - key: PORT
         generateValue: true
+      - key: SCHEDULER_SECRET
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: WATSON_STT_API_KEY
@@ -17,6 +19,51 @@ services:
       - key: WATSONX_API_KEY
         sync: false
       - key: WATSONX_PROJECT_ID
+        sync: false
+
+  - type: cron
+    name: acestarai-morning-reminders
+    env: node
+    schedule: "0 * * * *"
+    buildCommand: npm install
+    startCommand: node server/run-scheduled-job.js morning-reminders
+    envVars:
+      - key: APP_URL
+        fromService:
+          type: web
+          name: acestarai
+          property: host
+      - key: SCHEDULER_SECRET
+        sync: false
+
+  - type: cron
+    name: acestarai-post-meeting-check
+    env: node
+    schedule: "*/30 * * * *"
+    buildCommand: npm install
+    startCommand: node server/run-scheduled-job.js post-meeting-check
+    envVars:
+      - key: APP_URL
+        fromService:
+          type: web
+          name: acestarai
+          property: host
+      - key: SCHEDULER_SECRET
+        sync: false
+
+  - type: cron
+    name: acestarai-daily-digest
+    env: node
+    schedule: "0 * * * *"
+    buildCommand: npm install
+    startCommand: node server/run-scheduled-job.js daily-digest
+    envVars:
+      - key: APP_URL
+        fromService:
+          type: web
+          name: acestarai
+          property: host
+      - key: SCHEDULER_SECRET
         sync: false
 
 # Made with Bob

@@ -29,11 +29,11 @@ export async function authenticate(req, res, next) {
     }
     
     // Get user from database
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('id, email, full_name, email_verified')
-      .eq('id', decoded.userId)
-      .single();
+        const { data: user, error } = await supabase
+          .from('users')
+          .select('id, email, full_name, email_verified, time_zone, morning_planning_email_enabled, end_of_day_digest_enabled')
+          .eq('id', decoded.userId)
+          .single();
     
     if (error || !user) {
       return res.status(401).json({ 
@@ -77,7 +77,7 @@ export async function optionalAuthenticate(req, res, next) {
       if (decoded) {
         const { data: user } = await supabase
           .from('users')
-          .select('id, email, full_name, email_verified')
+          .select('id, email, full_name, email_verified, time_zone, morning_planning_email_enabled, end_of_day_digest_enabled')
           .eq('id', decoded.userId)
           .single();
         

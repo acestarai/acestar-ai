@@ -1,8 +1,9 @@
+import crypto from 'crypto';
 import express from 'express';
 import { supabase } from '../auth/supabase.js';
 import { hashPassword, comparePassword, validatePassword } from '../auth/password.js';
 import { generateToken, generateRandomToken, generateVerificationCode, hashToken } from '../auth/jwt.js';
-import { validateIBMEmail, sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail, buildVerificationLink } from '../auth/email.js';
+import { validateEmailAddress, sendVerificationEmail, sendPasswordResetEmail, sendWelcomeEmail, buildVerificationLink } from '../auth/email.js';
 import { authenticate } from '../auth/middleware.js';
 
 const router = express.Router();
@@ -19,6 +20,38 @@ const RATE_LIMIT_WINDOWS = {
   resendVerification: { limit: 5, windowMs: 15 * 60 * 1000 }
 };
 const RESEND_COOLDOWN_MS = 60 * 1000;
+const APP_URL = process.env.APP_URL || 'https://app.acestarai.com';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${APP_URL.replace(/\/$/, '')}/api/auth/google/callback`;
+const googleStateStore = new Map();
+const GOOGLE_STATE_TTL_MS = 10 * 60 * 1000;
+
+function cleanupExpiredGoogleStates() {
+  const now = Date.now();
+  for (const [state, payload] of googleStateStore.entries()) {
+    if (payload.expiresAt <= now) {
+      googleStateStore.delete(state);
+    }
+  }
+}
+
+function createGoogleState() {
+  cleanupExpiredGoogleStates();
+  const state = crypto.randomBytes(24).toString('hex');
+  googleStateStore.set(state, {
+    expiresAt: Date.now() + GOOGLE_STATE_TTL_MS
+  });
+  return state;
+}
+
+function consumeGoogleState(state) {
+  cleanupExpiredGoogleStates();
+  const payload = googleStateStore.get(state);
+  if (!payload) return false;
+  googleStateStore.delete(state);
+  return payload.expiresAt > Date.now();
+}
 
 function getClientIdentifier(req, email = '') {
   const normalizedEmail = String(email || '').trim().toLowerCase();
@@ -101,7 +134,10 @@ function formatUser(user) {
     defaultTranscriptType: user.default_transcript_type || 'standard',
     defaultSpeakerDiarization: Boolean(user.default_speaker_diarization),
     defaultSummaryType: user.default_summary_type || 'standard',
-    preferredExportFormat: user.preferred_export_format || 'pdf'
+    preferredExportFormat: user.preferred_export_format || 'pdf',
+    timeZone: user.time_zone || 'UTC',
+    morningPlanningEmailEnabled: user.morning_planning_email_enabled !== false,
+    endOfDayDigestEnabled: user.end_of_day_digest_enabled !== false
   };
 }
 
@@ -119,6 +155,18 @@ function normalizePreferredExportFormat(value) {
     return normalized;
   }
   return 'pdf';
+}
+
+function normalizeTimeZone(value) {
+  const candidate = String(value || '').trim();
+  if (!candidate) return 'UTC';
+
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: candidate });
+    return candidate;
+  } catch {
+    return 'UTC';
+  }
 }
 
 async function getStorageUsage(userId) {
@@ -198,7 +246,7 @@ async function issueVerificationCode(userId, email) {
 
 function renderVerificationPage({ title, message, success }) {
   const accent = success ? '#24a148' : '#da1e28';
-  const actionLabel = success ? 'Open IBM Recap' : 'Back to IBM Recap';
+  const actionLabel = success ? 'Open AcestarAI' : 'Back to AcestarAI';
 
   return `<!DOCTYPE html>
   <html lang="en">
@@ -253,7 +301,7 @@ function renderVerificationPage({ title, message, success }) {
         }
         a {
           display: inline-block;
-          background: #0f62fe;
+          background: #ff0a4d;
           color: #ffffff;
           text-decoration: none;
           padding: 12px 18px;
@@ -264,11 +312,40 @@ function renderVerificationPage({ title, message, success }) {
     </head>
     <body>
       <div class="card">
-        <div class="eyebrow">IBM Recap</div>
+        <div class="eyebrow">AcestarAI</div>
         <div class="status">${success ? '✓' : '!' } ${success ? 'Verification complete' : 'Verification issue'}</div>
         <h1>${title}</h1>
         <p>${message}</p>
-        <a href="${process.env.APP_URL || 'http://localhost:8787'}">${actionLabel}</a>
+        <a href="${APP_URL}">${actionLabel}</a>
+      </div>
+    </body>
+  </html>`;
+}
+
+function renderGoogleCallbackPage({ title, message, success }) {
+  const accent = success ? '#24c26a' : '#ff4d6d';
+
+  return `<!DOCTYPE html>
+  <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>${title}</title>
+      <style>
+        body { margin: 0; font-family: Arial, sans-serif; background: #120b22; color: #f9f8ff; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; }
+        .card { width: 100%; max-width: 560px; background: #21173f; border: 1px solid #34295f; border-radius: 16px; padding: 32px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35); }
+        .eyebrow { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: #a9a3cb; margin-bottom: 12px; }
+        .status { color: ${accent}; font-weight: 700; margin-bottom: 20px; }
+        a { display: inline-block; background: #ff0a4d; color: #ffffff; text-decoration: none; padding: 12px 18px; border-radius: 8px; font-weight: 600; }
+      </style>
+    </head>
+    <body>
+      <div class="card">
+        <div class="eyebrow">AcestarAI</div>
+        <div class="status">${success ? 'Google sign-in ready' : 'Google sign-in issue'}</div>
+        <h1>${title}</h1>
+        <p>${message}</p>
+        <a href="${APP_URL}">Return to AcestarAI</a>
       </div>
     </body>
   </html>`;
@@ -276,7 +353,7 @@ function renderVerificationPage({ title, message, success }) {
 
 /**
  * POST /api/auth/register
- * Register new user with supported IBM email domains
+ * Register new user with standard email and password
  */
 router.post('/register', async (req, res) => {
   try {
@@ -292,11 +369,11 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Email and password are required' });
     }
     
-    // Validate IBM email
-    if (!validateIBMEmail(email)) {
+    // Validate email
+    if (!validateEmailAddress(email)) {
       return res.status(400).json({ 
-        error: 'Only IBM email addresses (@ibm.com or @us.ibm.com) are allowed',
-        code: 'INVALID_EMAIL_DOMAIN'
+        error: 'Please enter a valid email address.',
+        code: 'INVALID_EMAIL'
       });
     }
     
@@ -481,7 +558,7 @@ router.get('/verify', async (req, res) => {
         .status(400)
         .send(renderVerificationPage({
           title: 'Verification link missing',
-          message: 'The verification link is incomplete. Return to IBM Recap and request a new verification email.',
+          message: 'The verification link is incomplete. Return to AcestarAI and request a new verification email.',
           success: false
         }));
     }
@@ -500,7 +577,7 @@ router.get('/verify', async (req, res) => {
         .status(400)
         .send(renderVerificationPage({
           title: 'Verification link is invalid',
-          message: 'This verification link is not recognized. Request a fresh email from the IBM Recap signup screen and try again.',
+          message: 'This verification link is not recognized. Request a fresh email from the AcestarAI signup screen and try again.',
           success: false
         }));
     }
@@ -511,7 +588,7 @@ router.get('/verify', async (req, res) => {
         .status(400)
         .send(renderVerificationPage({
           title: 'Verification link has expired',
-          message: 'This verification link expired. Return to IBM Recap and request a new verification email.',
+          message: 'This verification link expired. Return to AcestarAI and request a new verification email.',
           success: false
         }));
     }
@@ -531,7 +608,7 @@ router.get('/verify', async (req, res) => {
     
     res.send(renderVerificationPage({
       title: 'Email verified successfully',
-      message: 'Your IBM Recap account is now active. You can return to the app and sign in.',
+      message: 'Your AcestarAI account is now active. You can return to the app and sign in.',
       success: true
     }));
   } catch (error) {
@@ -540,9 +617,160 @@ router.get('/verify', async (req, res) => {
       .status(500)
       .send(renderVerificationPage({
         title: 'Verification failed',
-        message: 'IBM Recap could not complete verification right now. Please return to the app and request another verification email.',
+        message: 'AcestarAI could not complete verification right now. Please return to the app and request another verification email.',
         success: false
       }));
+  }
+});
+
+router.get('/google/start', (_req, res) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return res.status(503).send(renderGoogleCallbackPage({
+      title: 'Google sign-in is not configured yet',
+      message: 'Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable Google sign-in for AcestarAI.',
+      success: false
+    }));
+  }
+
+  const state = createGoogleState();
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: GOOGLE_REDIRECT_URI,
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    prompt: 'select_account'
+  });
+
+  return res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+});
+
+router.get('/google/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query;
+
+    if (!code || !state || !consumeGoogleState(String(state))) {
+      return res.status(400).send(renderGoogleCallbackPage({
+        title: 'Google sign-in failed',
+        message: 'The Google sign-in session is invalid or expired. Please try again from AcestarAI.',
+        success: false
+      }));
+    }
+
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: GOOGLE_REDIRECT_URI,
+        grant_type: 'authorization_code'
+      }).toString()
+    });
+    const tokenJson = await tokenResponse.json();
+
+    if (!tokenResponse.ok || !tokenJson.access_token) {
+      throw new Error(tokenJson.error_description || tokenJson.error || 'Failed to exchange Google authorization code.');
+    }
+
+    const profileResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: {
+        Authorization: `Bearer ${tokenJson.access_token}`
+      }
+    });
+    const profile = await profileResponse.json();
+
+    if (!profileResponse.ok || !profile.email || !profile.verified_email) {
+      throw new Error('Google did not return a verified email address.');
+    }
+
+    const normalizedEmail = String(profile.email).toLowerCase().trim();
+    const randomPasswordHash = await hashPassword(generateRandomToken(32));
+
+    let { data: user } = await supabase
+      .from('users')
+      .select('id, email, full_name, email_verified')
+      .eq('email', normalizedEmail)
+      .maybeSingle();
+
+    if (!user) {
+      const createResult = await supabase
+        .from('users')
+        .insert({
+          email: normalizedEmail,
+          password_hash: randomPasswordHash,
+          full_name: profile.name || null,
+          email_verified: true,
+          verification_token: null,
+          verification_token_expires: null
+        })
+        .select('id, email, full_name, email_verified')
+        .single();
+
+      if (createResult.error) {
+        throw createResult.error;
+      }
+
+      user = createResult.data;
+    } else if (!user.email_verified) {
+      await supabase
+        .from('users')
+        .update({
+          email_verified: true,
+          full_name: user.full_name || profile.name || null,
+          verification_token: null,
+          verification_token_expires: null
+        })
+        .eq('id', user.id);
+    }
+
+    const token = generateToken(user.id, normalizedEmail);
+    const tokenHash = hashToken(token);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    await supabase
+      .from('sessions')
+      .insert({
+        user_id: user.id,
+        token_hash: tokenHash,
+        expires_at: expiresAt.toISOString(),
+        ip_address: req.ip,
+        user_agent: req.headers['user-agent']
+      });
+
+    await supabase
+      .from('users')
+      .update({ last_login: new Date().toISOString() })
+      .eq('id', user.id);
+
+    return res.send(`<!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>AcestarAI</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; background: #120b22; color: #f9f8ff; display:flex; align-items:center; justify-content:center; min-height:100vh;">
+          <div style="text-align:center; max-width:520px; padding:24px;">
+            <h1>Signing you in to AcestarAI…</h1>
+            <p>Your Google account is ready. You can close this tab if nothing happens automatically.</p>
+          </div>
+          <script>
+            localStorage.setItem('auth_token', ${JSON.stringify(token)});
+            window.location.href = ${JSON.stringify(APP_URL)};
+          </script>
+        </body>
+      </html>`);
+  } catch (error) {
+    console.error('Google auth callback error:', error);
+    return res.status(500).send(renderGoogleCallbackPage({
+      title: 'Google sign-in failed',
+      message: 'AcestarAI could not complete Google sign-in right now. Please try again or use email login.',
+      success: false
+    }));
   }
 });
 
@@ -853,7 +1081,7 @@ router.get('/account', authenticate, async (req, res) => {
   try {
     const { data: user, error } = await supabase
       .from('users')
-      .select('id, email, full_name, email_verified, created_at, last_login, default_transcript_type, default_speaker_diarization, default_summary_type, preferred_export_format')
+      .select('id, email, full_name, email_verified, created_at, last_login, default_transcript_type, default_speaker_diarization, default_summary_type, preferred_export_format, time_zone, morning_planning_email_enabled, end_of_day_digest_enabled')
       .eq('id', req.user.id)
       .single();
 
@@ -890,13 +1118,23 @@ router.patch('/account', authenticate, async (req, res) => {
       defaultTranscriptType,
       defaultSpeakerDiarization,
       defaultSummaryType,
-      preferredExportFormat
+      preferredExportFormat,
+      timeZone,
+      morningPlanningEmailEnabled,
+      endOfDayDigestEnabled
     } = req.body;
     const normalizedFullName = typeof fullName === 'string' ? fullName.trim() : null;
     const normalizedTranscriptType = normalizeTranscriptType(defaultTranscriptType);
     const normalizedSpeakerDiarization = Boolean(defaultSpeakerDiarization);
     const normalizedSummaryType = normalizeSummaryType(defaultSummaryType);
     const normalizedPreferredExportFormat = normalizePreferredExportFormat(preferredExportFormat);
+    const normalizedTimeZone = normalizeTimeZone(timeZone);
+    const normalizedMorningPlanningEmailEnabled = typeof morningPlanningEmailEnabled === 'boolean'
+      ? morningPlanningEmailEnabled
+      : true;
+    const normalizedEndOfDayDigestEnabled = typeof endOfDayDigestEnabled === 'boolean'
+      ? endOfDayDigestEnabled
+      : true;
 
     const { data: user, error } = await supabase
       .from('users')
@@ -905,10 +1143,13 @@ router.patch('/account', authenticate, async (req, res) => {
         default_transcript_type: normalizedTranscriptType,
         default_speaker_diarization: normalizedSpeakerDiarization,
         default_summary_type: normalizedSummaryType,
-        preferred_export_format: normalizedPreferredExportFormat
+        preferred_export_format: normalizedPreferredExportFormat,
+        time_zone: normalizedTimeZone,
+        morning_planning_email_enabled: normalizedMorningPlanningEmailEnabled,
+        end_of_day_digest_enabled: normalizedEndOfDayDigestEnabled
       })
       .eq('id', req.user.id)
-      .select('id, email, full_name, email_verified, created_at, last_login, default_transcript_type, default_speaker_diarization, default_summary_type, preferred_export_format')
+      .select('id, email, full_name, email_verified, created_at, last_login, default_transcript_type, default_speaker_diarization, default_summary_type, preferred_export_format, time_zone, morning_planning_email_enabled, end_of_day_digest_enabled')
       .single();
 
     if (error || !user) {

@@ -1,4 +1,4 @@
-/* IBM Recap - Modern Tabbed Design */
+/* AcestarAI - Modern Tabbed Design */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -6,29 +6,45 @@
 }
 
 :root {
-  /* IBM Color Palette */
-  --ibm-blue: #0f62fe;
-  --ibm-blue-hover: #0353e9;
-  --ibm-gray-100: #161616;
-  --ibm-gray-90: #262626;
-  --ibm-gray-80: #393939;
-  --ibm-gray-70: #525252;
-  --ibm-gray-60: #6f6f6f;
-  --ibm-gray-50: #8d8d8d;
-  --ibm-gray-40: #a8a8a8;
-  --ibm-gray-30: #c6c6c6;
-  --ibm-gray-20: #e0e0e0;
-  --ibm-gray-10: #f4f4f4;
-  --ibm-teal: #009d9a;
-  --ibm-purple: #8a3ffc;
-  --ibm-green: #24a148;
-  --ibm-yellow: #f1c21b;
-  --ibm-red: #da1e28;
+  --brand-primary: #ff134f;
+  --brand-primary-hover: #e10943;
+  --brand-secondary: #ff8b00;
+  --brand-highlight: #ffef1e;
+  --brand-night: #11142d;
+  --brand-ink: #050608;
+  --brand-surface: #17191f;
+  --brand-surface-2: #242730;
+  --brand-border: #494d5f;
+  --brand-text-soft: #bbb4c8;
+  --brand-success: #24c26a;
+  --brand-warning: #ffb703;
+  --brand-danger: #ff4d6d;
+
+  /* Compatibility aliases for existing styles */
+  --ibm-blue: var(--brand-primary);
+  --ibm-blue-hover: var(--brand-primary-hover);
+  --ibm-gray-100: #120b22;
+  --ibm-gray-90: #21173f;
+  --ibm-gray-80: #34295f;
+  --ibm-gray-70: #54488e;
+  --ibm-gray-60: #7c73ab;
+  --ibm-gray-50: #a9a3cb;
+  --ibm-gray-40: #c7c3de;
+  --ibm-gray-30: #dfdcef;
+  --ibm-gray-20: #f0eff8;
+  --ibm-gray-10: #f9f8ff;
+  --ibm-teal: var(--brand-secondary);
+  --ibm-purple: #5d56ff;
+  --ibm-green: var(--brand-success);
+  --ibm-yellow: var(--brand-highlight);
+  --ibm-red: var(--brand-danger);
 }
 
 body {
-  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: var(--ibm-gray-100);
+  font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(circle at top, rgba(93, 86, 255, 0.24), transparent 28%),
+    linear-gradient(180deg, var(--brand-night) 0%, var(--brand-ink) 54%, #08040f 100%);
   color: var(--ibm-gray-10);
   line-height: 1.6;
   transition: background-color 0.3s ease, color 0.3s ease;
@@ -49,7 +65,7 @@ body:not(.dark-mode) {
 
 /* Header */
 .app-header {
-  background: var(--ibm-blue);
+  background: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-secondary) 100%);
   color: white;
   padding: 16px 32px;
   display: flex;
@@ -59,7 +75,7 @@ body:not(.dark-mode) {
 }
 
 body:not(.dark-mode) .app-header {
-  background: var(--ibm-blue);
+  background: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-secondary) 100%);
 }
 
 .header-left {
@@ -74,6 +90,29 @@ body:not(.dark-mode) .app-header {
   gap: 12px;
 }
 
+.brand-logo-image {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.brand-wordmark {
+  font-family: Garamond, "Times New Roman", serif;
+  font-size: 2rem;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.brand-wordmark span {
+  display: block;
+}
+
+.app-wordmark {
+  color: #fff7dd;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+}
+
 .logo-icon {
   width: 40px;
   height: 40px;
@@ -85,38 +124,6 @@ body:not(.dark-mode) .app-header {
   justify-content: center;
   font-weight: 700;
   font-size: 18px;
-}
-
-.logo-text {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: white;
-  position: relative;
-  padding-bottom: 0.25rem;
-}
-
-.logo-ibm {
-  font-weight: 700;
-  letter-spacing: 0.05em;
-}
-
-.logo-recap {
-  font-weight: 600;
-  position: relative;
-}
-
-.logo-recap::after {
-  content: '';
-  position: absolute;
-  bottom: -4px;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.8);
-  border-radius: 2px;
 }
 
 .header-right {
@@ -141,7 +148,8 @@ body:not(.dark-mode) .app-header {
 }
 
 .theme-toggle-btn {
-  background: var(--ibm-teal);
+  background: rgba(14, 7, 31, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   color: white;
   border: none;
   padding: 8px 16px;
@@ -153,7 +161,7 @@ body:not(.dark-mode) .app-header {
 }
 
 .theme-toggle-btn:hover {
-  background: #007d79;
+  background: rgba(14, 7, 31, 0.34);
 }
 
 .user-menu {
@@ -386,6 +394,8 @@ body.dark-mode .hero-section-wrapper {
   font-size: 48px;
   font-weight: 600;
   line-height: 1.2;
+  font-family: Garamond, "Times New Roman", serif;
+  letter-spacing: 0.01em;
   color: var(--text-primary);
   margin: 0;
 }
@@ -676,7 +686,7 @@ body:not(.dark-mode) .recommended-action {
 }
 
 .filename {
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'JetBrains Mono', monospace;
   font-style: italic;
   color: var(--ibm-blue);
 }
@@ -690,36 +700,39 @@ body:not(.dark-mode) .recommended-action {
 
 .search-bar {
   flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: var(--ibm-gray-90);
-  border: 1px solid var(--ibm-gray-80);
-  border-radius: 8px;
-  padding: 12px 16px;
+  position: relative;
 }
 
 body:not(.dark-mode) .search-bar {
-  background: white;
-  border-color: var(--ibm-gray-30);
+  background: transparent;
+  border-color: transparent;
 }
 
 .search-section .search-icon {
   font-size: 20px;
   color: var(--ibm-gray-40);
-  position: static;
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  z-index: 1;
 }
 
-.search-input {
-  flex: 1;
-  background: none;
-  border: none;
+.search-section .search-input {
+  width: 100%;
+  padding: 12px 16px 12px 48px;
+  background: var(--ibm-gray-90);
+  border: 1px solid var(--ibm-gray-80);
+  border-radius: 8px;
   color: var(--ibm-gray-10);
   font-size: 16px;
   outline: none;
 }
 
-body:not(.dark-mode) .search-input {
+body:not(.dark-mode) .search-section .search-input {
+  background: white;
+  border-color: var(--ibm-gray-30);
   color: var(--ibm-gray-100);
 }
 
@@ -1709,7 +1722,7 @@ body:not(.dark-mode) .account-form label {
   background: var(--ibm-gray-80);
   color: var(--ibm-gray-10);
   font-size: 14px;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'Manrope', sans-serif;
   resize: vertical;
   min-height: 120px;
 }
@@ -1734,6 +1747,98 @@ body:not(.dark-mode) .account-form textarea {
 .account-form small {
   color: var(--ibm-gray-50);
   font-size: 12px;
+}
+
+.meeting-notes-editor {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--ibm-gray-70);
+  background: var(--ibm-gray-80);
+  color: var(--ibm-gray-10);
+  font-size: 14px;
+  font-family: 'Manrope', sans-serif;
+  resize: vertical;
+  min-height: 280px;
+  line-height: 1.7;
+}
+
+body:not(.dark-mode) .meeting-notes-editor {
+  background: white;
+  border-color: var(--ibm-gray-30);
+  color: var(--ibm-gray-100);
+}
+
+.dictation-active-button {
+  border-color: rgba(255, 10, 77, 0.55);
+  box-shadow: 0 0 0 1px rgba(255, 10, 77, 0.22);
+}
+
+.dictation-status-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.dictation-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.dictation-status-badge.idle {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ibm-gray-20);
+}
+
+.dictation-status-badge.listening {
+  background: rgba(255, 10, 77, 0.14);
+  color: #ffd7e2;
+}
+
+.dictation-status-badge.transcribing {
+  background: rgba(255, 176, 103, 0.14);
+  color: #ffd8ad;
+}
+
+.dictation-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.dictation-status-badge.listening .dictation-status-dot {
+  animation: dictationPulse 1.2s ease-in-out infinite;
+}
+
+.dictation-status-copy {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ibm-gray-40);
+}
+
+@keyframes dictationPulse {
+  0%, 100% {
+    opacity: 0.5;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .account-preferences-stack {
@@ -1839,7 +1944,7 @@ body:not(.dark-mode) .account-segmented-option.selected {
   background: var(--ibm-gray-80);
   color: var(--ibm-gray-10);
   font-size: 14px;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'Manrope', sans-serif;
 }
 
 body:not(.dark-mode) .account-select {
@@ -1990,7 +2095,7 @@ body:not(.dark-mode) .recent-uploads-panel {
   border-radius: 8px;
   color: var(--ibm-gray-10);
   font-size: 14px;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'Manrope', sans-serif;
   transition: all 0.2s;
 }
 
@@ -2184,6 +2289,18 @@ body:not(.dark-mode) .recent-upload-filename {
   width: 100%;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .meetings-tab {
   display: flex;
   flex-direction: column;
@@ -2211,6 +2328,40 @@ body:not(.dark-mode) .recent-upload-filename {
 .record-right-column {
   display: flex;
   flex-direction: column;
+}
+
+.meetings-sidepanel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.meetings-sidepanel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  border-radius: 16px;
+  background: #1f1f1f;
+  border: 1px solid #2f2f2f;
+}
+
+.meetings-sidepanel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.meetings-sidepanel-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.meetings-sidepanel-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
 }
 
 .record-header {
@@ -2274,11 +2425,331 @@ body:not(.dark-mode) .meeting-card-primary {
   flex-wrap: wrap;
 }
 
+.screenshot-import-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid rgba(141, 141, 141, 0.24);
+  border-radius: 12px;
+  background: rgba(141, 141, 141, 0.06);
+}
+
+.dark-mode .screenshot-import-panel {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.screenshot-import-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.screenshot-uploaded-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.screenshot-uploaded-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f4f4f4;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.screenshot-import-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #161616;
+}
+
+.dark-mode .screenshot-import-title {
+  color: #f4f4f4;
+}
+
+.screenshot-review-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.screenshot-review-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(69, 137, 255, 0.16);
+  background: rgba(69, 137, 255, 0.04);
+}
+
+.dark-mode .screenshot-review-card {
+  background: rgba(69, 137, 255, 0.08);
+  border-color: rgba(69, 137, 255, 0.24);
+}
+
+.screenshot-review-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.screenshot-review-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #161616;
+}
+
+.dark-mode .screenshot-review-title {
+  color: #f4f4f4;
+}
+
+.screenshot-review-meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0f62fe;
+}
+
 .meeting-card-actions {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
   margin-left: auto;
+}
+
+.meeting-workspace-card {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid #393939;
+  background: #262626;
+}
+
+.meeting-prompt-card {
+  border-color: rgba(255, 131, 43, 0.35);
+  background: linear-gradient(180deg, rgba(38, 38, 38, 0.98), rgba(32, 24, 20, 0.98));
+}
+
+.meeting-prompt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.meeting-prompt-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f4f4f4;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.meeting-workspace-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.meeting-workspace-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 22px;
+}
+
+.meeting-workspace-heading {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.meeting-workspace-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.meeting-card-top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.meeting-card-status-block {
+  width: 100%;
+  margin-top: -6px;
+}
+
+.meeting-card-status-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 4px;
+  text-align: left;
+  width: max-content;
+  max-width: 100%;
+}
+
+.meeting-card-time-info {
+  font-size: 15px;
+  line-height: 1.5;
+  color: #f4f4f4;
+  text-align: left;
+  margin: 0;
+}
+
+.badge-scheduled-card {
+  background: rgba(255, 131, 43, 0.14);
+  color: #ffb067;
+  border: 1px solid rgba(255, 131, 43, 0.28);
+}
+
+.meeting-workspace-title {
+  font-size: 19px;
+  line-height: 1.25;
+  font-weight: 600;
+  color: #f4f4f4;
+}
+
+.meeting-workspace-details {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.meeting-workspace-row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 20px;
+  align-items: start;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.meeting-workspace-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.meeting-workspace-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #a8a8a8;
+}
+
+.meeting-workspace-value {
+  font-size: 15px;
+  line-height: 1.7;
+  color: #f4f4f4;
+}
+
+.meeting-workspace-note {
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.meeting-workspace-note.warning {
+  color: #ffd7b5;
+}
+
+.meeting-prompt-details {
+  gap: 0;
+}
+
+.meeting-prompt-note {
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: rgba(255, 131, 43, 0.08);
+  border: 1px solid rgba(255, 131, 43, 0.18);
+  color: #ffd7b5;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.meeting-workspace-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.meeting-workspace-actions .btn-secondary-large,
+.meeting-workspace-actions .btn-primary-large,
+.meeting-workspace-actions .account-back-button {
+  min-width: 0;
+}
+
+.meeting-card-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 107, 107, 0.28);
+  background: rgba(255, 107, 107, 0.1);
+  color: #ffb3b3;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.meeting-card-icon-button:hover {
+  background: rgba(255, 107, 107, 0.18);
+  border-color: rgba(255, 107, 107, 0.55);
+  color: #ffe1e1;
+  box-shadow: 0 8px 20px rgba(255, 107, 107, 0.12);
+  transform: translateY(-1px);
+}
+
+.meeting-card-icon-symbol {
+  font-size: 16px;
+  line-height: 1;
+  filter: saturate(0.1) brightness(1.2);
+}
+
+.meeting-prompt-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.meeting-prompt-actions .btn-primary-large,
+.meeting-prompt-actions .btn-secondary-large,
+.meeting-prompt-actions .account-back-button {
+  width: 100%;
+  justify-content: center;
 }
 
 .meeting-card:hover {
@@ -2326,10 +2797,15 @@ body:not(.dark-mode) .meeting-card-primary {
 
 .meetings-section-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+}
+
+.meetings-section-header .recent-uploads-badge {
+  margin-left: auto;
+  align-self: flex-start;
 }
 
 .meeting-title {
@@ -2431,7 +2907,17 @@ body:not(.dark-mode) .meeting-card-primary {
   color: #c6c6c6;
 }
 
+.archived-meeting-card .meeting-workspace-title {
+  color: #c6c6c6;
+}
+
 @media (max-width: 960px) {
+  .record-tab-content {
+    grid-template-columns: 1fr;
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+
   .upload-meeting-selector {
     align-items: stretch;
   }
@@ -2439,6 +2925,29 @@ body:not(.dark-mode) .meeting-card-primary {
   .upload-meeting-selector-input {
     width: 100%;
     min-width: 0;
+  }
+
+  .meeting-workspace-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .meeting-workspace-title {
+    font-size: 19px;
+  }
+
+  .meeting-prompt-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .meeting-card-status-row {
+    align-items: flex-start;
+  }
+
+  .meetings-sidepanel-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
   }
 }
 
@@ -2556,7 +3065,7 @@ body:not(.dark-mode) .meeting-card-primary {
   color: #a8a8a8;
 }
 
-/* Ask Recap Tab Styles */
+/* Ask Acestar Tab Styles */
 .ask-recap-tab {
   max-width: none !important;
   width: 100%;
@@ -3298,7 +3807,7 @@ body:not(.dark-mode) .meeting-card-primary {
 .success-filename {
   font-size: 14px;
   color: var(--ibm-gray-40);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 /* Audio Player */
@@ -3387,7 +3896,7 @@ body.dark-mode .audio-player-controls {
 .audio-time {
   font-size: 13px;
   color: var(--text-primary);
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: 'JetBrains Mono', monospace;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -3911,7 +4420,7 @@ body:not(.dark-mode) .input-group label {
   padding: 12px;
   color: var(--ibm-gray-10);
   font-size: 14px;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'Manrope', sans-serif;
 }
 
 body:not(.dark-mode) .text-input {
@@ -4248,7 +4757,7 @@ body.dark-mode .file-card-name {
   border: 1px solid var(--ibm-gray-30);
   border-radius: 4px;
   font-size: 14px;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'Manrope', sans-serif;
   background: white;
   color: var(--ibm-gray-100);
   transition: border-color 0.2s;
@@ -4505,7 +5014,7 @@ body.dark-mode .progress-section-message {
   border: none;
   cursor: pointer;
   transition: all 0.2s;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'Manrope', sans-serif;
 }
 
 .btn-primary-large {
@@ -4614,7 +5123,9 @@ body:not(.dark-mode) .summarize-header .transcript-ready-badge {
 
 /* Left side - Branding */
 .auth-branding {
-  background: linear-gradient(135deg, #0f62fe 0%, #0043ce 100%);
+  background:
+    radial-gradient(circle at top, rgba(255, 239, 30, 0.18), transparent 28%),
+    linear-gradient(160deg, #191d4c 0%, #0d0f1f 46%, #050608 100%);
   color: white;
   padding: 60px 40px;
   display: flex;
@@ -4630,35 +5141,23 @@ body:not(.dark-mode) .summarize-header .transcript-ready-badge {
   margin-bottom: 24px;
 }
 
-.auth-logo .logo-text {
-  font-size: 48px;
-  font-weight: 700;
-  color: white;
-  letter-spacing: 2px;
-  display: flex;
-  align-items: flex-start;
+.auth-brand-logo {
+  width: 116px;
+  height: 116px;
+  margin-bottom: 18px;
 }
 
-.auth-logo .logo-recap {
-  position: relative;
-  display: inline-block;
-}
-
-.auth-logo .logo-underline {
-  position: absolute;
-  bottom: -8px;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background: white;
-  border-radius: 2px;
+.auth-logo .brand-wordmark {
+  color: #fff7dd;
+  font-size: 3.4rem;
 }
 
 .auth-tagline {
   font-size: 20px;
   line-height: 1.5;
   margin-bottom: 48px;
-  opacity: 0.95;
+  color: #fff4c2;
+  max-width: 24rem;
 }
 
 .auth-features {
@@ -4759,7 +5258,7 @@ body:not(.dark-mode) .summarize-header .transcript-ready-badge {
   border: 1px solid var(--ibm-gray-30);
   border-radius: 4px;
   transition: all 0.2s;
-  font-family: 'IBM Plex Sans', sans-serif;
+  font-family: 'Manrope', sans-serif;
 }
 
 .auth-form input:focus {

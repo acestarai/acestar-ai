@@ -16,6 +16,7 @@ import { AssemblyAI } from 'assemblyai';
 import authRoutes from './routes/auth.js';
 import microsoftRoutes from './routes/microsoft.js';
 import { authenticate, optionalAuthenticate } from './auth/middleware.js';
+import { sendMorningPlanningReminderEmail, sendEndOfDayDigestEmail } from './auth/email.js';
 
 // Import Supabase client and storage utilities
 import { supabase } from './auth/supabase.js';
@@ -25,10 +26,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT = path.resolve(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
+const BRAND_LOGO_PATH = path.join(ROOT, 'Acestar AI logo.png');
 const OUTPUT_DIR = path.join(ROOT, 'output');
 const META_PATH = path.join(OUTPUT_DIR, 'latest.json');
 
 const PORT = Number(process.env.PORT || 8787);
+const APP_URL = process.env.APP_URL || 'https://app.acestarai.com';
 const DEVICE = process.env.DEVICE || 'BlackHole 2ch';
 const MIC = process.env.MIC || 'MacBook Air Microphone';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
@@ -46,6 +49,10 @@ const OPENROUTER_SUMMARY_MODEL = process.env.OPENROUTER_SUMMARY_MODEL || 'meta-l
 const ASSEMBLYAI_API_KEY = process.env.ASSEMBLYAI_API_KEY || '';
 const STORAGE_LIMIT_MB = Number(process.env.STORAGE_LIMIT_MB || 50);
 const STORAGE_LIMIT_BYTES = STORAGE_LIMIT_MB * 1024 * 1024;
+const POST_MEETING_DISMISS_COOLDOWN_MINUTES = Number(process.env.POST_MEETING_DISMISS_COOLDOWN_MINUTES || 120);
+const SCHEDULER_SECRET = process.env.SCHEDULER_SECRET || '';
+const MORNING_REMINDER_HOUR = Number(process.env.MORNING_REMINDER_HOUR || 8);
+const END_OF_DAY_DIGEST_HOUR = Number(process.env.END_OF_DAY_DIGEST_HOUR || 18);
 
 // Diarization service configuration (local Pyannote - optional)
 const DIARIZATION_URL = process.env.DIARIZATION_URL || 'http://localhost:5000';
@@ -74,6 +81,10 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(PUBLIC_DIR));
 
+app.get('/assets/acestar-logo', (_req, res) => {
+  res.sendFile(BRAND_LOGO_PATH);
+});
+
 
 // Configure multer for file uploads
 const upload = multer({
@@ -92,9 +103,71 @@ const upload = multer({
   }
 });
 
+const screenshotUpload = multer({
+  dest: OUTPUT_DIR,
+  limits: { fileSize: 15 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowedMimeTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+    const allowedExtensions = ['.png', '.jpg', '.jpeg', '.webp'];
+    const fileExtension = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.'));
+
+    if (allowedMimeTypes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PNG, JPG, JPEG, and WEBP screenshots are allowed'));
+    }
+  }
+});
+
+const dictatedNoteUpload = multer({
+  dest: OUTPUT_DIR,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowedMimeTypes = [
+      'audio/webm',
+      'audio/webm;codecs=opus',
+      'audio/mp4',
+      'audio/x-m4a',
+      'audio/mpeg',
+      'audio/wav',
+      'audio/wave',
+      'audio/ogg',
+      'video/webm'
+    ];
+    const allowedExtensions = ['.webm', '.m4a', '.mp3', '.wav', '.ogg'];
+    const originalName = String(file.originalname || '').toLowerCase();
+    const dotIndex = originalName.lastIndexOf('.');
+    const fileExtension = dotIndex >= 0 ? originalName.slice(dotIndex) : '';
+
+    if (allowedMimeTypes.includes(file.mimetype) || allowedExtensions.includes(fileExtension)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only WEBM, M4A, MP3, WAV, and OGG dictated notes are allowed'));
+    }
+  }
+});
+
 function runUploadMiddleware(req, res) {
   return new Promise((resolve, reject) => {
     upload.single('audio')(req, res, (err) => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+}
+
+function runScreenshotUploadMiddleware(req, res) {
+  return new Promise((resolve, reject) => {
+    screenshotUpload.single('screenshot')(req, res, (err) => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
+}
+
+function runDictatedNoteUploadMiddleware(req, res) {
+  return new Promise((resolve, reject) => {
+    dictatedNoteUpload.single('audio')(req, res, (err) => {
       if (err) return reject(err);
       resolve();
     });
@@ -109,8 +182,8 @@ const openrouter = OPENROUTER_API_KEY ? new OpenAI({
   apiKey: OPENROUTER_API_KEY,
   baseURL: 'https://openrouter.ai/api/v1',
   defaultHeaders: {
-    'HTTP-Referer': 'https://ibm-recap.onrender.com',
-    'X-Title': 'IBM Recap'
+    'HTTP-Referer': APP_URL,
+    'X-Title': 'AcestarAI'
   }
 }) : null;
 
@@ -191,6 +264,18 @@ function sanitizeOptionalString(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeTimeZone(value, fallback = 'UTC') {
+  const candidate = sanitizeOptionalString(value);
+  if (!candidate) return fallback;
+
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: candidate });
+    return candidate;
+  } catch {
+    return fallback;
+  }
 }
 
 function extensionFromMimeType(mimeType, fallback = '.txt') {
@@ -304,29 +389,833 @@ async function updateFileRecords(filters, patch) {
   }
 }
 
-async function createMeetingRecord(userId, { originalFilename, sourceType = 'upload', processingStatus = 'uploaded' }) {
-  try {
-    const { data, error } = await supabase
-      .from('meetings')
-      .insert({
-        user_id: userId,
-        title: deriveMeetingTitle(originalFilename),
-        original_filename: originalFilename,
-        source_type: sourceType,
-        processing_status: processingStatus,
-        uploaded_at: new Date().toISOString()
-      })
-      .select('id')
-      .single();
+function slugifyMeetingFilename(value, fallback = 'meeting') {
+  const cleaned = String(value || '')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+  return cleaned || fallback;
+}
 
-    if (error) {
+function deriveMeetingLifecycleStatus(meeting, relatedFiles = []) {
+  if (meeting?.status) {
+    return meeting.status;
+  }
+
+  const hasArtifacts = relatedFiles.length > 0 || meeting?.processing_status && meeting.processing_status !== 'uploaded';
+  if (hasArtifacts) {
+    return 'captured';
+  }
+  return 'scheduled';
+}
+
+function deriveMeetingCaptureMethod(meeting, relatedFiles = []) {
+  if (meeting?.capture_method) {
+    return meeting.capture_method;
+  }
+  if (relatedFiles.some((file) => file.file_type === 'audio')) {
+    return 'recording';
+  }
+  if (meeting?.notes) {
+    return 'written_notes';
+  }
+  return 'none';
+}
+
+function getMeetingEndAt(meeting) {
+  return meeting?.meeting_end_at || meeting?.meetingEndAt || null;
+}
+
+function getLocalDateKey(dateLike, timeZone = 'UTC') {
+  const value = new Date(dateLike);
+  if (Number.isNaN(value.getTime())) return null;
+
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  const parts = formatter.formatToParts(value);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+
+  return year && month && day ? `${year}-${month}-${day}` : null;
+}
+
+function getLocalHour(dateLike, timeZone = 'UTC') {
+  const value = new Date(dateLike);
+  if (Number.isNaN(value.getTime())) return null;
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    hour: '2-digit'
+  });
+
+  const parts = formatter.formatToParts(value);
+  const hour = parts.find((part) => part.type === 'hour')?.value;
+  return hour ? Number(hour) : null;
+}
+
+function getTimeZoneOffsetMs(date, timeZone = 'UTC') {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  const parts = formatter.formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const asUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    Number(values.hour),
+    Number(values.minute),
+    Number(values.second)
+  );
+
+  return asUtc - date.getTime();
+}
+
+function parseNaiveDateTimeParts(value) {
+  const match = String(value || '').trim().match(
+    /^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?$/
+  );
+
+  if (!match) return null;
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+    hour: Number(match[4]),
+    minute: Number(match[5]),
+    second: Number(match[6] || 0)
+  };
+}
+
+function normalizeMeetingDateTimeInput(value, timeZone = 'UTC') {
+  const normalizedValue = sanitizeOptionalString(value);
+  if (!normalizedValue) return null;
+
+  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(normalizedValue)) {
+    const absoluteValue = new Date(normalizedValue);
+    return Number.isNaN(absoluteValue.getTime()) ? normalizedValue : absoluteValue.toISOString();
+  }
+
+  const parts = parseNaiveDateTimeParts(normalizedValue);
+  if (!parts) return normalizedValue;
+
+  const utcGuessMs = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+  let correctedDate = new Date(utcGuessMs - getTimeZoneOffsetMs(new Date(utcGuessMs), timeZone));
+  const correctedOffset = getTimeZoneOffsetMs(correctedDate, timeZone);
+  correctedDate = new Date(utcGuessMs - correctedOffset);
+
+  return correctedDate.toISOString();
+}
+
+function ensureSchedulerAuthorized(req) {
+  if (!SCHEDULER_SECRET) {
+    return { ok: false, status: 500, error: 'SCHEDULER_SECRET is not configured.' };
+  }
+
+  const providedSecret = req.get('x-scheduler-secret') || req.body?.schedulerSecret || '';
+  if (!providedSecret || providedSecret !== SCHEDULER_SECRET) {
+    return { ok: false, status: 401, error: 'Scheduler authorization failed.' };
+  }
+
+  return { ok: true };
+}
+
+function hasDismissCooldownElapsed(meeting, now = new Date()) {
+  const dismissedAt = meeting?.dismissed_post_meeting_at || meeting?.dismissedPostMeetingAt;
+  if (!dismissedAt) return true;
+
+  const dismissedTime = new Date(dismissedAt).getTime();
+  if (Number.isNaN(dismissedTime)) return true;
+
+  return (now.getTime() - dismissedTime) >= POST_MEETING_DISMISS_COOLDOWN_MINUTES * 60 * 1000;
+}
+
+function isPendingCompletionMeeting(meeting, now = new Date()) {
+  if (!meeting || meeting.archived_at || meeting.archivedAt) return false;
+
+  const lifecycleStatus = meeting.status || meeting.lifecycleStatus || deriveMeetingLifecycleStatus(meeting);
+  if (!['scheduled', 'missing'].includes(lifecycleStatus)) return false;
+
+  const meetingEndAt = getMeetingEndAt(meeting);
+  if (!meetingEndAt) return false;
+
+  const endTime = new Date(meetingEndAt).getTime();
+  if (Number.isNaN(endTime) || endTime > now.getTime()) return false;
+
+  return hasDismissCooldownElapsed(meeting, now);
+}
+
+async function evaluatePendingCompletionMeetingIds(userId, now = new Date()) {
+  const { data: meetings, error } = await supabase
+    .from('meetings')
+    .select('id, status, archived_at, meeting_end_at, dismissed_post_meeting_at, notified_post_meeting_at')
+    .eq('user_id', userId)
+    .is('archived_at', null)
+    .not('meeting_end_at', 'is', null)
+    .order('meeting_end_at', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  const pendingMeetings = (meetings || []).filter((meeting) => isPendingCompletionMeeting(meeting, now));
+  const nowIso = now.toISOString();
+
+  for (const meeting of pendingMeetings) {
+    const patch = {};
+    const shouldReopenAfterDismiss = Boolean(meeting.dismissed_post_meeting_at) && hasDismissCooldownElapsed(meeting, now);
+
+    if (!meeting.notified_post_meeting_at || shouldReopenAfterDismiss) {
+      patch.notified_post_meeting_at = nowIso;
+    }
+
+    if (shouldReopenAfterDismiss) {
+      patch.dismissed_post_meeting_at = null;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      patch.last_lifecycle_evaluated_at = nowIso;
+      await updateMeetingRecord(meeting.id, patch);
+    }
+  }
+
+  return pendingMeetings.map((meeting) => meeting.id);
+}
+
+async function runPostMeetingCompletionSweep(now = new Date()) {
+  const { data: candidateMeetings, error } = await supabase
+    .from('meetings')
+    .select('id, user_id, status, archived_at, meeting_end_at, dismissed_post_meeting_at, notified_post_meeting_at')
+    .is('archived_at', null)
+    .not('meeting_end_at', 'is', null)
+    .order('meeting_end_at', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  const meetingsByUserId = new Map();
+  for (const meeting of candidateMeetings || []) {
+    if (!meeting.user_id) continue;
+    if (!meetingsByUserId.has(meeting.user_id)) {
+      meetingsByUserId.set(meeting.user_id, []);
+    }
+    meetingsByUserId.get(meeting.user_id).push(meeting);
+  }
+
+  let pendingCount = 0;
+  let notifiedCount = 0;
+  const pendingMeetingIds = [];
+
+  for (const [userId] of meetingsByUserId.entries()) {
+    const pendingIds = await evaluatePendingCompletionMeetingIds(userId, now);
+    pendingCount += pendingIds.length;
+    pendingMeetingIds.push(...pendingIds);
+  }
+
+  for (const meeting of candidateMeetings || []) {
+    if (pendingMeetingIds.includes(meeting.id) && !meeting.notified_post_meeting_at) {
+      notifiedCount += 1;
+    }
+  }
+
+  return {
+    pendingCount,
+    notifiedCount,
+    pendingMeetingIds
+  };
+}
+
+async function evaluateEndOfDayReviewForUser(userId, {
+  timeZone = 'UTC',
+  targetDate = getLocalDateKey(new Date(), timeZone),
+  now = new Date()
+} = {}) {
+  if (!targetDate) {
+    throw new Error('A valid target date is required for end-of-day review.');
+  }
+
+  const { data: meetings, error } = await supabase
+    .from('meetings')
+    .select('id, title, status, capture_method, archived_at, meeting_start_at, meeting_end_at, completed_at, uploaded_at')
+    .eq('user_id', userId)
+    .is('archived_at', null)
+    .order('meeting_start_at', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  const relevantMeetings = (meetings || []).filter((meeting) => {
+    const anchor = meeting.meeting_end_at || meeting.meeting_start_at || meeting.uploaded_at;
+    return getLocalDateKey(anchor, timeZone) === targetDate;
+  });
+  const relevantMeetingIds = relevantMeetings.map((meeting) => meeting.id);
+
+  const updatedMeetingIds = [];
+  const nowIso = now.toISOString();
+
+  for (const meeting of relevantMeetings) {
+    const lifecycleStatus = meeting.status || deriveMeetingLifecycleStatus(meeting);
+    const meetingEndAt = getMeetingEndAt(meeting);
+    const endTime = meetingEndAt ? new Date(meetingEndAt).getTime() : null;
+
+    if (
+      lifecycleStatus === 'scheduled' &&
+      endTime &&
+      !Number.isNaN(endTime) &&
+      endTime <= now.getTime()
+    ) {
+      await updateMeetingRecord(meeting.id, {
+        status: 'missing',
+        capture_method: 'none',
+        last_lifecycle_evaluated_at: nowIso
+      });
+      updatedMeetingIds.push(meeting.id);
+      meeting.status = 'missing';
+      meeting.capture_method = 'none';
+    }
+  }
+
+  const summary = relevantMeetings.reduce((accumulator, meeting) => {
+    const lifecycleStatus = meeting.status || deriveMeetingLifecycleStatus(meeting);
+    accumulator.total += 1;
+    if (lifecycleStatus === 'captured') accumulator.captured += 1;
+    if (lifecycleStatus === 'completed') accumulator.completed += 1;
+    if (lifecycleStatus === 'missing') accumulator.missing += 1;
+    if (lifecycleStatus === 'scheduled') accumulator.scheduled += 1;
+    return accumulator;
+  }, {
+    total: 0,
+    captured: 0,
+    completed: 0,
+    missing: 0,
+    scheduled: 0
+  });
+
+  return {
+    targetDate,
+    timeZone,
+    relevantMeetingIds,
+    updatedMeetingIds,
+    summary
+  };
+}
+
+async function runMorningPlanningReminderSweep(now = new Date()) {
+  const { data: users, error } = await supabase
+    .from('users')
+    .select('id, email, full_name, time_zone, morning_planning_email_enabled, last_morning_planning_email_date')
+    .eq('email_verified', true)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  let eligibleCount = 0;
+  let sentCount = 0;
+  const sentUserIds = [];
+
+  for (const user of users || []) {
+    if (user.morning_planning_email_enabled === false) continue;
+
+    const timeZone = normalizeTimeZone(user.time_zone);
+    const localHour = getLocalHour(now, timeZone);
+    const targetDate = getLocalDateKey(now, timeZone);
+
+    if (localHour !== MORNING_REMINDER_HOUR || !targetDate) continue;
+    if (user.last_morning_planning_email_date === targetDate) continue;
+
+    eligibleCount += 1;
+
+    const { data: meetingsForUser, error: meetingCountError } = await supabase
+      .from('meetings')
+      .select('id, meeting_start_at, meeting_end_at, uploaded_at')
+      .eq('user_id', user.id)
+      .is('archived_at', null);
+
+    if (meetingCountError) {
+      throw meetingCountError;
+    }
+
+    const meetingsForTargetDate = (meetingsForUser || []).filter((meeting) => {
+      const anchor = meeting.meeting_end_at || meeting.meeting_start_at || meeting.uploaded_at;
+      return getLocalDateKey(anchor, timeZone) === targetDate;
+    });
+
+    if (meetingsForTargetDate.length > 0) {
+      await supabase
+        .from('users')
+        .update({ last_morning_planning_email_date: targetDate })
+        .eq('id', user.id);
+      continue;
+    }
+
+    await sendMorningPlanningReminderEmail(user.email, {
+      fullName: user.full_name,
+      timeZone,
+      targetDate,
+      meetingsUrl: `${APP_URL}/?tab=meetings`
+    });
+
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ last_morning_planning_email_date: targetDate })
+      .eq('id', user.id);
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    sentCount += 1;
+    sentUserIds.push(user.id);
+  }
+
+  return {
+    eligibleCount,
+    sentCount,
+    sentUserIds
+  };
+}
+
+async function runEndOfDayDigestSweep(now = new Date()) {
+  const { data: users, error } = await supabase
+    .from('users')
+    .select('id, email, full_name, time_zone, end_of_day_digest_enabled, last_end_of_day_digest_date')
+    .eq('email_verified', true)
+    .order('created_at', { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  let eligibleCount = 0;
+  let sentCount = 0;
+  const sentUserIds = [];
+
+  for (const user of users || []) {
+    if (user.end_of_day_digest_enabled === false) continue;
+
+    const timeZone = normalizeTimeZone(user.time_zone);
+    const localHour = getLocalHour(now, timeZone);
+    const targetDate = getLocalDateKey(now, timeZone);
+
+    if (localHour !== END_OF_DAY_DIGEST_HOUR || !targetDate) continue;
+    if (user.last_end_of_day_digest_date === targetDate) continue;
+
+    eligibleCount += 1;
+
+    const result = await evaluateEndOfDayReviewForUser(user.id, {
+      timeZone,
+      targetDate,
+      now
+    });
+
+    if ((result.summary.total || 0) === 0) {
+      await supabase
+        .from('users')
+        .update({ last_end_of_day_digest_date: targetDate })
+        .eq('id', user.id);
+      continue;
+    }
+
+    await sendEndOfDayDigestEmail(user.email, {
+      fullName: user.full_name,
+      timeZone,
+      targetDate,
+      summary: result.summary,
+      meetingsUrl: `${APP_URL}/?tab=meetings`
+    });
+
+    if (result.relevantMeetingIds.length > 0) {
+      await supabase
+        .from('meetings')
+        .update({ included_in_daily_digest_at: now.toISOString() })
+        .in('id', result.relevantMeetingIds);
+    }
+
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ last_end_of_day_digest_date: targetDate })
+      .eq('id', user.id);
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    sentCount += 1;
+    sentUserIds.push(user.id);
+  }
+
+  return {
+    eligibleCount,
+    sentCount,
+    sentUserIds
+  };
+}
+
+function buildMeetingContextLines(meetingContext) {
+  return [
+    meetingContext?.title ? `- Meeting title: ${meetingContext.title}` : null,
+    meetingContext?.meeting_start_at ? `- Meeting date/time: ${new Date(meetingContext.meeting_start_at).toISOString()}` : null,
+    meetingContext?.meeting_end_at ? `- Meeting end time: ${new Date(meetingContext.meeting_end_at).toISOString()}` : null,
+    meetingContext?.organizer_name ? `- Organizer: ${meetingContext.organizer_name}` : null,
+    meetingContext?.attendee_summary ? `- Known attendees/context: ${meetingContext.attendee_summary}` : null,
+    meetingContext?.external_meeting_url ? `- Meeting link: ${meetingContext.external_meeting_url}` : null,
+    meetingContext?.notes ? `- Saved meeting notes: ${meetingContext.notes}` : null
+  ].filter(Boolean);
+}
+
+function normalizeImportedMeetingCandidate(candidate, fallbackDate = null, timeZone = 'UTC', options = {}) {
+  const preserveLocalTime = Boolean(options.preserveLocalTime);
+  const safeTitle = sanitizeOptionalString(candidate?.title);
+  if (!safeTitle) return null;
+
+  const rawMeetingStartAt = sanitizeOptionalString(candidate?.meetingStartAt || candidate?.start_time || candidate?.startTime);
+  const rawMeetingEndAt = sanitizeOptionalString(candidate?.meetingEndAt || candidate?.end_time || candidate?.endTime);
+  const meetingStartAt = preserveLocalTime
+    ? rawMeetingStartAt
+    : normalizeMeetingDateTimeInput(rawMeetingStartAt, timeZone);
+  const explicitMeetingEndAt = preserveLocalTime
+    ? rawMeetingEndAt
+    : normalizeMeetingDateTimeInput(rawMeetingEndAt, timeZone);
+  const organizerName = sanitizeOptionalString(candidate?.organizerName || candidate?.organizer);
+  const attendeeSummary = sanitizeOptionalString(candidate?.attendeeSummary || candidate?.attendees);
+  const externalMeetingUrl = sanitizeOptionalString(candidate?.externalMeetingUrl || candidate?.meetingUrl || candidate?.meeting_url);
+  const notes = sanitizeOptionalString(candidate?.notes);
+  const confidence = Math.max(0, Math.min(1, Number(candidate?.confidence || 0.5)));
+  const durationMinutesRaw = candidate?.durationMinutes ?? candidate?.duration_minutes ?? candidate?.duration;
+  const durationMinutes = Number(durationMinutesRaw);
+  let meetingEndAt = explicitMeetingEndAt;
+
+  if (!meetingEndAt && meetingStartAt && Number.isFinite(durationMinutes) && durationMinutes > 0) {
+    if (preserveLocalTime) {
+      const startParts = parseNaiveDateTimeParts(meetingStartAt);
+      if (startParts) {
+        const startMs = Date.UTC(
+          startParts.year,
+          startParts.month - 1,
+          startParts.day,
+          startParts.hour,
+          startParts.minute,
+          startParts.second
+        );
+        const derivedEnd = new Date(startMs + (durationMinutes * 60 * 1000));
+        const pad = (value) => String(value).padStart(2, '0');
+        meetingEndAt = `${derivedEnd.getUTCFullYear()}-${pad(derivedEnd.getUTCMonth() + 1)}-${pad(derivedEnd.getUTCDate())}T${pad(derivedEnd.getUTCHours())}:${pad(derivedEnd.getUTCMinutes())}`;
+      }
+    } else {
+      const startTime = new Date(meetingStartAt).getTime();
+      if (!Number.isNaN(startTime)) {
+        meetingEndAt = new Date(startTime + (durationMinutes * 60 * 1000)).toISOString();
+      }
+    }
+  }
+
+  return {
+    title: safeTitle,
+    meetingStartAt: meetingStartAt || fallbackDate,
+    meetingEndAt: meetingEndAt || meetingStartAt || fallbackDate,
+    organizerName,
+    attendeeSummary,
+    externalMeetingUrl,
+    notes,
+    confidence,
+    durationMinutes: Number.isFinite(durationMinutes) && durationMinutes > 0 ? durationMinutes : null
+  };
+}
+
+function deriveImportedMeetingInitialStatus(meeting, now = new Date()) {
+  const endAt = meeting?.meetingEndAt || meeting?.meetingStartAt || null;
+  if (!endAt) return 'scheduled';
+
+  const endTime = new Date(endAt).getTime();
+  if (Number.isNaN(endTime)) return 'scheduled';
+
+  return endTime <= now.getTime() ? 'missing' : 'scheduled';
+}
+
+function extractJsonFromModelOutput(content) {
+  const raw = String(content || '').trim();
+  if (!raw) {
+    throw new Error('The screenshot parser returned an empty response.');
+  }
+
+  const fencedMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fencedMatch?.[1]) {
+    return fencedMatch[1].trim();
+  }
+
+  const firstArray = raw.indexOf('[');
+  const lastArray = raw.lastIndexOf(']');
+  if (firstArray !== -1 && lastArray !== -1 && lastArray > firstArray) {
+    return raw.slice(firstArray, lastArray + 1);
+  }
+
+  const firstObject = raw.indexOf('{');
+  const lastObject = raw.lastIndexOf('}');
+  if (firstObject !== -1 && lastObject !== -1 && lastObject > firstObject) {
+    return raw.slice(firstObject, lastObject + 1);
+  }
+
+  return raw;
+}
+
+async function extractMeetingsFromScreenshot({ filePath, mimeType, now = new Date() }) {
+  if (!openai) {
+    throw new Error('Screenshot meeting import requires OPENAI_API_KEY so the screenshot can be parsed.');
+  }
+
+  const imageBase64 = fs.readFileSync(filePath, 'base64');
+  const dataUrl = `data:${mimeType || 'image/png'};base64,${imageBase64}`;
+  const dateContext = now.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
+  const response = await openai.chat.completions.create({
+    model: OPENAI_SUMMARY_MODEL,
+    messages: [
+      {
+        role: 'system',
+        content: `You extract meetings from Outlook calendar screenshots. Return only valid JSON.
+
+Return either:
+[
+  {
+    "title": "string",
+    "meetingStartAt": "YYYY-MM-DDTHH:MM:SS",
+    "meetingEndAt": "YYYY-MM-DDTHH:MM:SS",
+    "durationMinutes": 45,
+    "organizerName": "string or null",
+    "attendeeSummary": "string or null",
+    "externalMeetingUrl": "string or null",
+    "notes": "short extraction note or null",
+    "confidence": 0.0
+  }
+]
+
+Rules:
+- Extract only actual meetings shown in the screenshot.
+- Ignore UI chrome, reminders, and duplicate labels.
+- If the screenshot is for a single day view, assume all extracted meetings belong to that day.
+- Use 24-hour-safe local timestamps with seconds.
+- If only a duration is visible, return it as durationMinutes so the end time can be derived.
+- If organizer or attendees are not visible, set them to null.
+- Confidence should be between 0 and 1.
+- If nothing reliable is visible, return [].
+- Do not wrap the JSON in markdown fences.`
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `Today is ${dateContext}. Extract the meetings visible in this calendar screenshot so they can be confirmed and imported into AcestarAI.`
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: dataUrl
+            }
+          }
+        ]
+      }
+    ]
+  });
+
+  const rawContent = response.choices[0]?.message?.content || '';
+  const parsed = JSON.parse(extractJsonFromModelOutput(rawContent));
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.meetings)
+      ? parsed.meetings
+      : [];
+
+  return candidates
+    .map((candidate) => normalizeImportedMeetingCandidate(candidate, null, 'UTC', { preserveLocalTime: true }))
+    .filter(Boolean);
+}
+
+async function generateStructuredMeetingSummary({ sourceLabel, content, meetingContext = null, customPrompt = '' }) {
+  const meetingContextLines = buildMeetingContextLines(meetingContext);
+  const meetingContextPromptBlock = meetingContextLines.length > 0
+    ? `\n\nSaved meeting context:\n${meetingContextLines.join('\n')}\n\nUse this saved context to help with framing, disambiguating names, and understanding the meeting purpose when it aligns with the provided source. Do not invent details that are unsupported by either the source material or the saved meeting context. If the source material and saved context conflict, prefer the source material.`
+    : '';
+
+  const systemPrompt = (customPrompt || `You are a concise meeting analyst. Return ONLY markdown (no preface) with exactly these sections:
+## Meeting purpose
+## Key discussion points
+## Decisions made
+## Action items
+## Risks / blockers
+## Open questions
+
+Rules:
+- Keep executive-level and concise
+- 5-10 bullets max in Key discussion points
+- Action item format: Owner — Task — Due date/ETA (TBD if unknown)
+- Do not invent facts
+- If no evidence for a section, write: - None captured.`) + meetingContextPromptBlock;
+
+  const userPrompt = meetingContextLines.length > 0
+    ? `SAVED MEETING CONTEXT:\n${meetingContextLines.join('\n')}\n\n${sourceLabel}:\n${content}`
+    : `${sourceLabel}:\n${content}`;
+
+  if (openai) {
+    const response = await openai.chat.completions.create({
+      model: OPENAI_SUMMARY_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 2000,
+    });
+    return decorateSummaryDocument((response.choices[0]?.message?.content || '').trim(), meetingContext);
+  }
+
+  if (openrouter) {
+    const response = await openrouter.chat.completions.create({
+      model: OPENROUTER_SUMMARY_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.3,
+      max_tokens: 2000,
+    });
+    return decorateSummaryDocument((response.choices[0]?.message?.content || '').trim(), meetingContext);
+  }
+
+  throw new Error('No summarization service configured. Please set OPENAI_API_KEY or OPENROUTER_API_KEY.');
+}
+
+function formatSummaryHeaderDateTime(dateLike) {
+  if (!dateLike) return null;
+  const value = new Date(dateLike);
+  if (Number.isNaN(value.getTime())) return null;
+  return value.toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  });
+}
+
+function decorateSummaryDocument(summary, meetingContext = null) {
+  const cleanSummary = String(summary || '').trim();
+  const title = sanitizeOptionalString(meetingContext?.title) || 'Meeting Summary';
+  const organizer = sanitizeOptionalString(meetingContext?.organizer_name);
+  const attendees = sanitizeOptionalString(meetingContext?.attendee_summary);
+  const meetingStart = formatSummaryHeaderDateTime(meetingContext?.meeting_start_at);
+  const meetingEnd = formatSummaryHeaderDateTime(meetingContext?.meeting_end_at);
+
+  const headerLines = [
+    `# ${title}`,
+    organizer ? `Organizer: ${organizer}` : null,
+    attendees ? `Attendees: ${attendees}` : null,
+    meetingStart ? `Meeting start: ${meetingStart}` : null,
+    meetingEnd ? `Meeting end: ${meetingEnd}` : null
+  ].filter(Boolean);
+
+  if (!headerLines.length) {
+    return cleanSummary;
+  }
+
+  return `${headerLines.join('\n')}\n\n${cleanSummary}`.trim();
+}
+
+function extractSummaryDocumentHeader(summary) {
+  const lines = String(summary || '').split('\n');
+  if (!lines.length) {
+    return {
+      title: 'Meeting Summary',
+      metadataLines: [],
+      body: ''
+    };
+  }
+
+  const titleLine = lines[0]?.startsWith('# ') ? lines[0].replace(/^#\s*/, '').trim() : 'Meeting Summary';
+  const metadataLines = [];
+  let index = 1;
+
+  while (index < lines.length && lines[index].trim()) {
+    metadataLines.push(lines[index].trim());
+    index += 1;
+  }
+
+  while (index < lines.length && !lines[index].trim()) {
+    index += 1;
+  }
+
+  return {
+    title: titleLine,
+    metadataLines,
+    body: lines.slice(index).join('\n').trim()
+  };
+}
+
+async function createMeetingRecord(userId, {
+  originalFilename,
+  sourceType = 'upload',
+  processingStatus = 'uploaded',
+  meetingStatus = 'captured',
+  captureMethod = 'recording'
+}) {
+  try {
+    const insertPayload = {
+      user_id: userId,
+      title: deriveMeetingTitle(originalFilename),
+      original_filename: originalFilename,
+      source_type: sourceType,
+      processing_status: processingStatus,
+      uploaded_at: new Date().toISOString(),
+      status: meetingStatus,
+      capture_method: captureMethod
+    };
+
+    while (true) {
+      const { data, error } = await supabase
+        .from('meetings')
+        .insert(insertPayload)
+        .select('id')
+        .single();
+
+      if (!error) {
+        return data?.id || null;
+      }
+
+      const missingColumn = extractMissingColumnName(error);
+      if (missingColumn && missingColumn in insertPayload) {
+        delete insertPayload[missingColumn];
+        continue;
+      }
+
       if (isMissingRelation(error, 'meetings')) {
         return null;
       }
       throw error;
     }
-
-    return data?.id || null;
   } catch (error) {
     if (isMissingRelation(error, 'meetings')) {
       return null;
@@ -349,19 +1238,27 @@ async function updateMeetingRecord(meetingId, patch) {
       nextPatch.completed_at = new Date().toISOString();
     }
 
-    const { error } = await supabase
-      .from('meetings')
-      .update(nextPatch)
-      .eq('id', meetingId);
+    while (true) {
+      const { error } = await supabase
+        .from('meetings')
+        .update(nextPatch)
+        .eq('id', meetingId);
 
-    if (error) {
+      if (!error) {
+        return true;
+      }
+
+      const missingColumn = extractMissingColumnName(error);
+      if (missingColumn && missingColumn in nextPatch) {
+        delete nextPatch[missingColumn];
+        continue;
+      }
+
       if (isMissingRelation(error, 'meetings')) {
         return false;
       }
       throw error;
     }
-
-    return true;
   } catch (error) {
     if (!isMissingRelation(error, 'meetings')) {
       console.error('⚠️ Failed to update meeting record:', error);
@@ -641,7 +1538,7 @@ async function readStoredTextArtifact(file) {
       try {
         fs.unlinkSync(tempPath);
       } catch (cleanupError) {
-        console.error('Failed to clean up Ask Recap temp artifact:', cleanupError);
+        console.error('Failed to clean up Ask Acestar temp artifact:', cleanupError);
       }
     }
   }
@@ -653,7 +1550,7 @@ async function generateAskRecapAnswer({ question, citations }) {
     return `(${citationId}) Meeting: ${citation.meetingTitle}\nDocument: ${citation.documentLabel}\nReference: ${citation.lineRef}${citation.pageNumber ? `, Page ${citation.pageNumber}` : ''}\nExcerpt:\n${citation.snippet}`;
   }).join('\n\n');
 
-  const systemPrompt = `You are Ask Recap, an internal IBM meeting knowledge assistant. Answer the user's question using only the provided citations. Prefer the most specific evidence that directly answers the question. Do not infer details that are not stated in the excerpts. Keep the answer concise, clear, and practical. Do not include citation numbers, timestamps, bracketed references, or source formatting in the answer. If the citations are insufficient or conflicting, say what is uncertain instead of inventing details.`;
+  const systemPrompt = `You are Ask Acestar, a meeting knowledge assistant for working professionals. Answer the user's question using only the provided citations. Prefer the most specific evidence that directly answers the question. Do not infer details that are not stated in the excerpts. Keep the answer concise, clear, and practical. Do not include citation numbers, timestamps, bracketed references, or source formatting in the answer. If the citations are insufficient or conflicting, say what is uncertain instead of inventing details.`;
   const userPrompt = `QUESTION:\n${question}\n\nCITATIONS:\n${citationBlocks}`;
 
   if (openai) {
@@ -712,7 +1609,7 @@ async function generateAskRecapContextualAnswer({ question, citations, conversat
       )).join('\n')
     : 'No structured insights available.';
 
-  const systemPrompt = `You are Ask Recap, an internal IBM meeting knowledge assistant. Answer the user's question using the provided conversation context, meeting metadata, structured insights, and retrieved evidence. Prefer structured insights when the question is about action items, blockers, risks, open questions, decisions, or meeting duration. Prefer the most specific evidence that directly answers the question. Use prior conversation only to resolve follow-up references and pronouns, not to invent facts. Use meeting metadata when it helps identify the relevant meeting, organizer, attendees, date, notes, or status. Do not include citation numbers, timestamps, bracketed references, or source formatting in the answer. Do not use markdown syntax such as # headings, **bold**, * bullets, or backticks. When structure helps, use plain numbered lists, plain bullet lines, and short readable paragraphs only. Keep the answer concise, clear, and practical. If the available context is insufficient or conflicting, say what is uncertain instead of inventing details.`;
+  const systemPrompt = `You are Ask Acestar, a meeting knowledge assistant for working professionals. Answer the user's question using the provided conversation context, meeting metadata, structured insights, and retrieved evidence. Prefer structured insights when the question is about action items, blockers, risks, open questions, decisions, or meeting duration. Prefer the most specific evidence that directly answers the question. Use prior conversation only to resolve follow-up references and pronouns, not to invent facts. Use meeting metadata when it helps identify the relevant meeting, organizer, attendees, date, notes, or status. Do not include citation numbers, timestamps, bracketed references, or source formatting in the answer. Do not use markdown syntax such as # headings, **bold**, * bullets, or backticks. When structure helps, use plain numbered lists, plain bullet lines, and short readable paragraphs only. Keep the answer concise, clear, and practical. If the available context is insufficient or conflicting, say what is uncertain instead of inventing details.`;
   const userPrompt = `CONVERSATION HISTORY:\n${historyBlock}\n\nMEETING METADATA:\n${metadataBlock}\n\nSTRUCTURED INSIGHTS:\n${insightsBlock}\n\nQUESTION:\n${question}\n\nRETRIEVED EVIDENCE:\n${citationBlocks}`;
 
   if (openai) {
@@ -738,7 +1635,7 @@ function fallbackAskRecapChatTitle(question, answer = '') {
     .slice(0, 5);
 
   if (!tokens.length) {
-    return 'Ask Recap follow-up';
+    return 'Ask Acestar follow-up';
   }
 
   return tokens
@@ -768,7 +1665,7 @@ async function generateAskRecapChatTitle({ question, answer }) {
         return title.slice(0, 60);
       }
     } catch (error) {
-      console.error('Failed to generate Ask Recap chat title with OpenAI:', error);
+      console.error('Failed to generate Ask Acestar chat title with OpenAI:', error);
     }
   }
 
@@ -1084,7 +1981,7 @@ async function ensureAskRecapChunksIndexed(files, meetingTitleById) {
     try {
       content = await readStoredTextArtifact(file);
     } catch (artifactError) {
-      console.error('Failed to read Ask Recap source artifact for indexing:', artifactError);
+      console.error('Failed to read Ask Acestar source artifact for indexing:', artifactError);
       continue;
     }
 
@@ -1248,6 +2145,7 @@ async function convertMp4ToMp3(inputPath, outputPath) {
 }
 
 const MAX_TRANSCRIPTION_PAYLOAD_BYTES = 24 * 1024 * 1024;
+const TRANSCRIPTION_SEGMENT_SECONDS = 15 * 60;
 
 async function createTranscriptionSizedAudio(inputPath) {
   const sizedPath = path.join(
@@ -1295,6 +2193,214 @@ async function getTranscriptionInputPath(audioPath) {
       }
     }
   };
+}
+
+async function splitAudioForTranscription(inputPath, segmentSeconds = TRANSCRIPTION_SEGMENT_SECONDS) {
+  const segmentPattern = path.join(
+    OUTPUT_DIR,
+    `transcribe-segment-${Date.now()}-${Math.random().toString(36).slice(2)}-%03d.mp3`
+  );
+
+  await runProcess('ffmpeg', [
+    '-y',
+    '-i', inputPath,
+    '-f', 'segment',
+    '-segment_time', String(segmentSeconds),
+    '-c', 'copy',
+    segmentPattern
+  ]);
+
+  const prefix = path.basename(segmentPattern).replace('%03d.mp3', '');
+  const segmentPaths = fs.readdirSync(OUTPUT_DIR)
+    .filter((name) => name.startsWith(prefix) && name.endsWith('.mp3'))
+    .map((name) => path.join(OUTPUT_DIR, name))
+    .sort();
+
+  return segmentPaths;
+}
+
+function buildTranscriptLinesFromSegments(segments, transcriptOptions, redactText, baseOffsetSeconds = 0) {
+  const lines = [];
+  let lastSpeaker = null;
+  let lastEndTime = baseOffsetSeconds;
+
+  if (segments.length) {
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const start = Math.floor((seg.start || 0) + baseOffsetSeconds);
+      const end = Math.floor((seg.end || 0) + baseOffsetSeconds);
+      const gap = start - lastEndTime;
+      let line = '';
+
+      if (transcriptOptions.timestamps) {
+        const hh = Math.floor(start / 3600);
+        const mm = Math.floor((start % 3600) / 60);
+        const ss = start % 60;
+        const ts = `[${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}]`;
+        line += `${ts} `;
+      }
+
+      if (transcriptOptions.speakerDiarization) {
+        const currentSpeaker = seg.speaker;
+        if (currentSpeaker && currentSpeaker !== lastSpeaker) {
+          line += `Speaker ${currentSpeaker}: `;
+          lastSpeaker = currentSpeaker;
+        }
+      }
+
+      let text = seg.text?.trim() || '';
+      text = redactText(text);
+      line += text;
+
+      if (transcriptOptions.pauses && gap > 2 && i > 0) {
+        line += ` [pause: ${gap}s]`;
+      }
+
+      if (line.trim()) lines.push(line);
+      lastEndTime = end;
+    }
+  }
+
+  return lines;
+}
+
+async function transcribeSingleSegmentWithProviders(segmentPath, transcriptOptions, redactText, diarizationSegments = null, timeOffsetSeconds = 0) {
+  if (openai) {
+    try {
+      const whisperParams = {
+        file: fs.createReadStream(segmentPath),
+        model: OPENAI_TRANSCRIBE_MODEL,
+        response_format: 'verbose_json',
+      };
+
+      const transcription = await openai.audio.transcriptions.create(whisperParams);
+      const segments = transcription.segments || [];
+      if (segments.length) {
+        return {
+          lines: buildTranscriptLinesFromSegments(segments, transcriptOptions, redactText, timeOffsetSeconds),
+          model: 'OpenAI Whisper'
+        };
+      }
+
+      let text = redactText((transcription.text || '').trim());
+      return {
+        lines: text ? [text] : [],
+        model: 'OpenAI Whisper'
+      };
+    } catch (whisperError) {
+      console.error('OpenAI Whisper segment failed:', whisperError);
+    }
+  }
+
+  if (openrouter) {
+    const transcription = await openrouter.audio.transcriptions.create({
+      file: fs.createReadStream(segmentPath),
+      model: OPENROUTER_TRANSCRIBE_MODEL,
+      response_format: 'verbose_json',
+    });
+
+    let segments = transcription.segments || [];
+    if (diarizationSegments && segments.length) {
+      segments = alignSegmentsWithSpeakers(segments, diarizationSegments);
+    }
+
+    if (segments.length) {
+      return {
+        lines: buildTranscriptLinesFromSegments(segments, transcriptOptions, redactText, timeOffsetSeconds),
+        model: 'OpenRouter Whisper'
+      };
+    }
+
+    let text = redactText((transcription.text || '').trim());
+    return {
+      lines: text ? [text] : [],
+      model: 'OpenRouter Whisper'
+    };
+  }
+
+  throw new Error('Both OpenAI Whisper and OpenRouter are unavailable. Please configure API keys.');
+}
+
+async function transcribeLargeAudioInChunks(inputPath, transcriptOptions, redactText, updateProgress, diarizationSegments = null) {
+  const segmentPaths = await splitAudioForTranscription(inputPath);
+  if (!segmentPaths.length) {
+    throw new Error('Failed to split large recording for transcription.');
+  }
+
+  const combinedLines = [];
+  let usedModel = 'unknown';
+
+  try {
+    for (let index = 0; index < segmentPaths.length; index += 1) {
+      const segmentPath = segmentPaths[index];
+      const progressStart = 18 + Math.floor((index / segmentPaths.length) * 55);
+      updateProgress(progressStart, `Transcribing long recording in parts (${index + 1}/${segmentPaths.length})...`);
+
+      const offsetSeconds = index * TRANSCRIPTION_SEGMENT_SECONDS;
+      const result = await transcribeSingleSegmentWithProviders(
+        segmentPath,
+        transcriptOptions,
+        redactText,
+        diarizationSegments,
+        offsetSeconds
+      );
+      usedModel = result.model || usedModel;
+      combinedLines.push(...result.lines);
+    }
+  } finally {
+    segmentPaths.forEach((segmentPath) => {
+      if (fs.existsSync(segmentPath)) {
+        try {
+          fs.unlinkSync(segmentPath);
+        } catch (cleanupError) {
+          console.error('Failed to clean up transcription segment:', cleanupError);
+        }
+      }
+    });
+  }
+
+  return {
+    lines: combinedLines,
+    model: usedModel
+  };
+}
+
+async function transcribeDictatedNoteAudio(audioPath) {
+  const transcriptOptions = {
+    timestamps: false,
+    pauses: false,
+    speakerDiarization: false,
+    redactWords: null
+  };
+  const redactText = (text) => text;
+  const transcriptionInput = await getTranscriptionInputPath(audioPath);
+
+  try {
+    if (transcriptionInput.sizeBytes > MAX_TRANSCRIPTION_PAYLOAD_BYTES) {
+      const chunkedResult = await transcribeLargeAudioInChunks(
+        transcriptionInput.path,
+        transcriptOptions,
+        redactText,
+        () => {},
+        null
+      );
+      return chunkedResult.lines.join('\n').trim();
+    }
+
+    const result = await transcribeSingleSegmentWithProviders(
+      transcriptionInput.path,
+      transcriptOptions,
+      redactText,
+      null,
+      0
+    );
+
+    return result.lines.join('\n').trim();
+  } finally {
+    if (transcriptionInput?.cleanup) {
+      transcriptionInput.cleanup();
+    }
+  }
 }
 
 async function cleanupTemporaryAudio(userId, meta) {
@@ -1354,7 +2460,7 @@ async function getMeetingContext(userId, meetingId) {
 
   const { data, error } = await supabase
     .from('meetings')
-    .select('id, title, meeting_start_at, organizer_name, attendee_summary, external_meeting_url, notes')
+    .select('id, title, meeting_start_at, meeting_end_at, organizer_name, attendee_summary, external_meeting_url, notes')
     .eq('id', meetingId)
     .eq('user_id', userId)
     .maybeSingle();
@@ -1750,6 +2856,8 @@ app.post('/api/upload-audio', optionalAuthenticate, async (req, res) => {
         meetingId = existingMeeting.id;
         await updateMeetingRecord(meetingId, {
           original_filename: originalFilename,
+          status: 'captured',
+          capture_method: 'recording',
           processing_status: 'uploaded',
           processing_error: null
         });
@@ -1757,7 +2865,9 @@ app.post('/api/upload-audio', optionalAuthenticate, async (req, res) => {
         meetingId = await createMeetingRecord(userId, {
           originalFilename,
           sourceType: 'upload',
-          processingStatus: 'uploaded'
+          processingStatus: 'uploaded',
+          meetingStatus: 'captured',
+          captureMethod: 'recording'
         });
       }
     }
@@ -2006,8 +3116,20 @@ app.post('/api/transcribe', optionalAuthenticate, async (req, res) => {
           updateJob(job.id, { percent: 10, message: 'Speaker diarization unavailable, proceeding with standard transcription...' });
         }
         
-        // Only proceed with Whisper if AssemblyAI didn't succeed
-        if (!assemblyAISucceeded && openai) {
+        // For very large recordings, split the optimized working copy into transcription-safe chunks.
+        if (!assemblyAISucceeded && transcriptionInput.sizeBytes > MAX_TRANSCRIPTION_PAYLOAD_BYTES) {
+          const chunkedResult = await transcribeLargeAudioInChunks(
+            transcriptionInput.path,
+            transcriptOptions,
+            redactText,
+            (percent, message) => updateJob(job.id, { percent, message }),
+            diarizationSegments
+          );
+          lines.push(...chunkedResult.lines);
+          usedModel = `${chunkedResult.model} (chunked)`;
+        }
+        // Only proceed with Whisper if AssemblyAI didn't succeed and chunking was not needed
+        else if (!assemblyAISucceeded && openai) {
           try {
             updateJob(job.id, { percent: 15, message: 'Transcribing with OpenAI Whisper...' });
 
@@ -2199,66 +3321,11 @@ app.post('/api/transcribe', optionalAuthenticate, async (req, res) => {
           throw new Error('No transcription service configured. Please set OPENAI_API_KEY, OPENROUTER_API_KEY, or ASSEMBLYAI_API_KEY.');
         }
 
+        const meetingContext = await getMeetingContext(userId, meetingId);
+
         // Generate PDF version of transcript
         const transcriptPdfPath = transcriptPath.replace(/\.txt$/i, '.pdf');
-        const pdfDoc = new PDFDocument();
-        const pdfStream = fs.createWriteStream(transcriptPdfPath);
-        pdfDoc.pipe(pdfStream);
-        
-        // Add IBM branding header
-        pdfDoc.fontSize(24).font('Helvetica-Bold').text('IBM Recap', { align: 'center' });
-        pdfDoc.moveDown();
-        pdfDoc.fontSize(16).font('Helvetica').text('Meeting Transcript', { align: 'center' });
-        pdfDoc.moveDown();
-        pdfDoc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
-        pdfDoc.moveDown(2);
-        
-        // Add transcript content
-        pdfDoc.fontSize(11);
-        let lastSpeaker = null;
-        
-        for (const line of lines) {
-          if (line.startsWith('#')) {
-            // Header lines
-            pdfDoc.fontSize(14).font('Helvetica-Bold').text(line.replace(/^#\s*/, ''), { continued: false });
-            pdfDoc.moveDown(0.5);
-            pdfDoc.fontSize(11).font('Helvetica');
-          } else if (line.trim()) {
-            // Check if line contains a speaker label
-            const speakerMatch = line.match(/^(\[[\d:]+\]\s*)?(Speaker [A-Z]:)\s*(.*)$/);
-            
-            if (speakerMatch) {
-              const timestamp = speakerMatch[1] || '';
-              const speaker = speakerMatch[2];
-              const text = speakerMatch[3];
-              
-              // Add spacing between different speakers
-              if (lastSpeaker && lastSpeaker !== speaker) {
-                pdfDoc.moveDown(1);
-              }
-              
-              // Write timestamp in regular font if present
-              if (timestamp) {
-                pdfDoc.font('Helvetica').text(timestamp, { continued: true });
-              }
-              
-              // Write speaker label in bold
-              pdfDoc.font('Helvetica-Bold').text(speaker + ' ', { continued: true });
-              
-              // Write the rest of the text in regular font
-              pdfDoc.font('Helvetica').text(text, { continued: false });
-              
-              lastSpeaker = speaker;
-            } else {
-              // Regular line without speaker label
-              pdfDoc.font('Helvetica').text(line, { continued: false });
-              lastSpeaker = null;
-            }
-          }
-        }
-        
-        pdfDoc.end();
-        await new Promise((resolve) => pdfStream.on('finish', resolve));
+        await generateTranscriptPdf(lines.join('\n'), transcriptPdfPath, meetingContext);
         fs.writeFileSync(transcriptPath, `${lines.join('\n')}\n`, 'utf8');
         const transcriptDurationSeconds = extractTranscriptDurationSeconds(lines.join('\n'));
         
@@ -2302,6 +3369,8 @@ app.post('/api/transcribe', optionalAuthenticate, async (req, res) => {
                 });
               }
               await updateMeetingRecord(meetingId, {
+                status: 'captured',
+                capture_method: 'recording',
                 processing_status: 'transcript_ready',
                 processing_error: null,
                 ...(transcriptDurationSeconds ? { duration_seconds: transcriptDurationSeconds } : {})
@@ -2420,101 +3489,18 @@ app.post('/api/summarize', optionalAuthenticate, async (req, res) => {
 
         updateJob(job.id, { percent: 10, message: 'Preparing summarization...' });
         
-        const meetingContextLines = [
-          meetingContext?.title ? `- Meeting title: ${meetingContext.title}` : null,
-          meetingContext?.meeting_start_at ? `- Meeting date/time: ${new Date(meetingContext.meeting_start_at).toISOString()}` : null,
-          meetingContext?.organizer_name ? `- Organizer: ${meetingContext.organizer_name}` : null,
-          meetingContext?.attendee_summary ? `- Known attendees/context: ${meetingContext.attendee_summary}` : null,
-          meetingContext?.external_meeting_url ? `- Meeting link: ${meetingContext.external_meeting_url}` : null,
-          meetingContext?.notes ? `- Saved meeting notes: ${meetingContext.notes}` : null
-        ].filter(Boolean);
-
-        const meetingContextPromptBlock = meetingContextLines.length > 0
-          ? `\n\nSaved meeting context:\n${meetingContextLines.join('\n')}\n\nUse this saved context to help with framing, disambiguating names, and understanding the meeting purpose when it aligns with the transcript. Do not invent details that are unsupported by either the transcript or the saved meeting context. If the transcript and saved context conflict, prefer what was actually said in the transcript.`
-          : '';
-
-        // Use custom prompt if provided, otherwise use default
-        const systemPrompt = (customPrompt || `You are a concise meeting analyst. Return ONLY markdown (no preface) with exactly these sections:
-## Meeting purpose
-## Key discussion points
-## Decisions made
-## Action items
-## Risks / blockers
-## Open questions
-
-Rules:
-- Keep executive-level and concise
-- 5-10 bullets max in Key discussion points
-- Action item format: Owner — Task — Due date/ETA (TBD if unknown)
-- Do not invent facts
-- If no evidence for a section, write: - None captured.`) + meetingContextPromptBlock;
-
-        const userPrompt = meetingContextLines.length > 0
-          ? `SAVED MEETING CONTEXT:\n${meetingContextLines.join('\n')}\n\nTRANSCRIPT:\n${transcript}`
-          : `TRANSCRIPT:\n${transcript}`;
-
-        let summary = '';
-        let usedModel = 'unknown';
-
-        // Try OpenAI GPT-4o first (primary)
-        if (openai) {
-          try {
-            updateJob(job.id, { percent: 35, message: 'Generating summary with GPT-4o...' });
-            const response = await openai.chat.completions.create({
-              model: OPENAI_SUMMARY_MODEL,
-              messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt },
-              ],
-              temperature: 0.3,
-              max_tokens: 2000,
-            });
-
-            summary = (response.choices[0]?.message?.content || '').trim();
-            usedModel = 'GPT-4o';
-          } catch (gptError) {
-            console.error('GPT-4o failed, falling back to OpenRouter:', gptError);
-            updateJob(job.id, { percent: 35, message: 'GPT-4o failed, trying OpenRouter fallback...' });
-            
-            // Fallback to OpenRouter
-            if (openrouter) {
-              updateJob(job.id, { percent: 50, message: 'Generating summary with Llama 3.1 8B...' });
-              
-              const response = await openrouter.chat.completions.create({
-                model: OPENROUTER_SUMMARY_MODEL,
-                messages: [
-                  { role: 'system', content: systemPrompt },
-                  { role: 'user', content: userPrompt },
-                ],
-                temperature: 0.3,
-                max_tokens: 2000,
-              });
-
-              summary = (response.choices[0]?.message?.content || '').trim();
-              usedModel = 'Llama 3.1 8B (OpenRouter Fallback)';
-            } else {
-              throw new Error('Both GPT-4o and OpenRouter are unavailable. Please configure API keys.');
-            }
-          }
-        } else if (openrouter) {
-          // If OpenAI is not configured, use OpenRouter directly
-          updateJob(job.id, { percent: 35, message: 'Generating summary with Llama 3.1 8B...' });
-          
-          const response = await openrouter.chat.completions.create({
-            model: OPENROUTER_SUMMARY_MODEL,
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            temperature: 0.3,
-            max_tokens: 2000,
-          });
-
-          summary = (response.choices[0]?.message?.content || '').trim();
-          usedModel = 'Llama 3.1 8B (OpenRouter)';
-        } else {
-          throw new Error('No summarization service configured. Please set OPENAI_API_KEY or OPENROUTER_API_KEY.');
-        }
+        updateJob(job.id, { percent: 35, message: 'Generating summary...' });
+        const summary = await generateStructuredMeetingSummary({
+          sourceLabel: 'TRANSCRIPT',
+          content: transcript,
+          meetingContext,
+          customPrompt
+        });
+        const usedModel = openai
+          ? 'GPT-4o'
+          : openrouter
+            ? 'Llama 3.1 8B (OpenRouter)'
+            : 'unknown';
 
         updateJob(job.id, { percent: 85, message: 'Writing summary file...' });
         fs.writeFileSync(summaryPath, `${summary}\n`, 'utf8');
@@ -2560,6 +3546,8 @@ Rules:
                 });
               }
               await updateMeetingRecord(meetingId, {
+                status: 'captured',
+                capture_method: 'recording',
                 processing_status: 'completed',
                 processing_error: null
               });
@@ -2585,88 +3573,7 @@ Rules:
         
         // Generate PDF version of summary
         const summaryPdfPath = summaryPath.replace(/\.md$/i, '.pdf');
-        const summaryPdfDoc = new PDFDocument();
-        const summaryPdfStream = fs.createWriteStream(summaryPdfPath);
-        summaryPdfDoc.pipe(summaryPdfStream);
-        
-        // Add IBM branding header
-        summaryPdfDoc.fontSize(24).font('Helvetica-Bold').text('IBM Recap', { align: 'center' });
-        summaryPdfDoc.moveDown();
-        summaryPdfDoc.fontSize(16).font('Helvetica').text('Meeting Summary', { align: 'center' });
-        summaryPdfDoc.moveDown();
-        summaryPdfDoc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
-        summaryPdfDoc.moveDown(2);
-        
-        // Parse and format markdown content
-        const summaryLines = summary.split('\n');
-        summaryPdfDoc.fontSize(11).font('Helvetica');
-        
-        for (const line of summaryLines) {
-          if (line.startsWith('## ')) {
-            summaryPdfDoc.moveDown(0.5);
-            summaryPdfDoc.fontSize(14).font('Helvetica-Bold').text(line.replace(/^##\s*/, ''));
-            summaryPdfDoc.moveDown(0.3);
-            summaryPdfDoc.fontSize(11).font('Helvetica');
-          } else if (line.startsWith('# ')) {
-            summaryPdfDoc.moveDown(0.5);
-            summaryPdfDoc.fontSize(16).font('Helvetica-Bold').text(line.replace(/^#\s*/, ''));
-            summaryPdfDoc.moveDown(0.3);
-            summaryPdfDoc.fontSize(11).font('Helvetica');
-          } else if (line.trim().startsWith('**') && line.trim().endsWith('**')) {
-            // This is a bold section header (e.g., **List of attendees**)
-            const headerText = line.trim().slice(2, -2); // Remove ** from both ends
-            summaryPdfDoc.moveDown(0.5);
-            summaryPdfDoc.fontSize(12).font('Helvetica-Bold').text(headerText);
-            summaryPdfDoc.moveDown(0.2);
-            summaryPdfDoc.fontSize(11).font('Helvetica');
-          } else if (line.trim().startsWith('- ')) {
-            // Handle bullet points - preserve bold formatting
-            let bulletText = line.trim().substring(2); // Remove "- "
-            
-            // Check if the bullet contains bold text (e.g., **Action items**)
-            const boldPattern = /\*\*([^*]+)\*\*/g;
-            const parts = [];
-            let lastIndex = 0;
-            let match;
-            
-            while ((match = boldPattern.exec(bulletText)) !== null) {
-              // Add text before the bold part
-              if (match.index > lastIndex) {
-                parts.push({ text: bulletText.substring(lastIndex, match.index), bold: false });
-              }
-              // Add the bold part
-              parts.push({ text: match[1], bold: true });
-              lastIndex = match.index + match[0].length;
-            }
-            
-            // Add any remaining text after the last bold part
-            if (lastIndex < bulletText.length) {
-              parts.push({ text: bulletText.substring(lastIndex), bold: false });
-            }
-            
-            // If no bold parts found, treat as regular text
-            if (parts.length === 0) {
-              summaryPdfDoc.text(`  • ${bulletText}`, { indent: 20 });
-            } else {
-              // Render with mixed formatting
-              summaryPdfDoc.text('  • ', { continued: true, indent: 20 });
-              parts.forEach((part, index) => {
-                summaryPdfDoc.font(part.bold ? 'Helvetica-Bold' : 'Helvetica')
-                  .text(part.text, { continued: index < parts.length - 1 });
-              });
-              summaryPdfDoc.font('Helvetica'); // Reset to regular font
-            }
-          } else if (line.trim()) {
-            // Regular paragraph text - remove any ** markers
-            let paragraphText = line.replace(/\*\*/g, ''); // Remove all ** markers
-            summaryPdfDoc.text(paragraphText);
-          } else {
-            summaryPdfDoc.moveDown(0.3);
-          }
-        }
-        
-        summaryPdfDoc.end();
-        await new Promise((resolve) => summaryPdfStream.on('finish', resolve));
+        await generateSummaryPdf(summary, summaryPdfPath);
         const currentMeta = readMeta();
         writeMeta({
           audioPath: null,
@@ -2774,9 +3681,13 @@ app.get('/api/meetings', authenticate, async (req, res) => {
       const hasSummary = relatedFiles.some((file) => file.file_type === 'summary');
       const actionItemsCount = relatedFiles.reduce((max, file) => Math.max(max, Number(file.action_items_count || 0)), 0);
       const speakerDiarization = relatedFiles.some((file) => file.speaker_diarization);
+      const status = deriveMeetingLifecycleStatus(meeting, relatedFiles);
+      const captureMethod = deriveMeetingCaptureMethod(meeting, relatedFiles);
 
       return {
         ...meeting,
+        status,
+        capture_method: captureMethod,
         artifactCount: relatedFiles.length,
         hasTranscript,
         hasSummary,
@@ -2792,10 +3703,267 @@ app.get('/api/meetings', authenticate, async (req, res) => {
   }
 });
 
+app.get('/api/meetings/pending-completion', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const meetingIds = await evaluatePendingCompletionMeetingIds(userId, new Date());
+
+    return res.json({
+      ok: true,
+      meetingIds,
+      evaluatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error in GET /api/meetings/pending-completion:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to evaluate pending meeting completions.' });
+  }
+});
+
+app.post('/api/jobs/meetings/post-meeting-check/run', async (req, res) => {
+  const authorization = ensureSchedulerAuthorized(req);
+  if (!authorization.ok) {
+    return res.status(authorization.status).json({ ok: false, error: authorization.error });
+  }
+
+  try {
+    const result = await runPostMeetingCompletionSweep(new Date());
+    return res.json({
+      ok: true,
+      ...result,
+      evaluatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error in POST /api/jobs/meetings/post-meeting-check/run:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to run post-meeting completion sweep.' });
+  }
+});
+
+app.post('/api/jobs/meetings/morning-reminders/run', async (req, res) => {
+  const authorization = ensureSchedulerAuthorized(req);
+  if (!authorization.ok) {
+    return res.status(authorization.status).json({ ok: false, error: authorization.error });
+  }
+
+  try {
+    const result = await runMorningPlanningReminderSweep(new Date());
+    return res.json({
+      ok: true,
+      ...result,
+      evaluatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error in POST /api/jobs/meetings/morning-reminders/run:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to run morning planning reminders.' });
+  }
+});
+
+app.post('/api/meetings/end-of-day-review', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const timeZone = sanitizeOptionalString(req.body?.timeZone) || 'UTC';
+    const targetDate = sanitizeOptionalString(req.body?.targetDate) || getLocalDateKey(new Date(), timeZone);
+
+    const result = await evaluateEndOfDayReviewForUser(userId, {
+      timeZone,
+      targetDate,
+      now: new Date()
+    });
+
+    return res.json({
+      ok: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error in POST /api/meetings/end-of-day-review:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to run end-of-day review.' });
+  }
+});
+
+app.post('/api/jobs/meetings/daily-digest/run', async (req, res) => {
+  const authorization = ensureSchedulerAuthorized(req);
+  if (!authorization.ok) {
+    return res.status(authorization.status).json({ ok: false, error: authorization.error });
+  }
+
+  try {
+    const result = await runEndOfDayDigestSweep(new Date());
+    return res.json({
+      ok: true,
+      ...result,
+      evaluatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error in POST /api/jobs/meetings/daily-digest/run:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to run daily digest job.' });
+  }
+});
+
+app.post('/api/jobs/meetings/end-of-day-review/run', async (req, res) => {
+  const authorization = ensureSchedulerAuthorized(req);
+  if (!authorization.ok) {
+    return res.status(authorization.status).json({ ok: false, error: authorization.error });
+  }
+
+  try {
+    const userId = sanitizeOptionalString(req.body?.userId);
+    const timeZone = sanitizeOptionalString(req.body?.timeZone) || 'UTC';
+    const targetDate = sanitizeOptionalString(req.body?.targetDate) || getLocalDateKey(new Date(), timeZone);
+
+    if (!userId) {
+      return res.status(400).json({ ok: false, error: 'userId is required.' });
+    }
+
+    const result = await evaluateEndOfDayReviewForUser(userId, {
+      timeZone,
+      targetDate,
+      now: new Date()
+    });
+
+    return res.json({
+      ok: true,
+      userId,
+      ...result
+    });
+  } catch (error) {
+    console.error('Error in POST /api/jobs/meetings/end-of-day-review/run:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to run end-of-day review job.' });
+  }
+});
+
+app.post('/api/meetings/:id/dismiss-post-meeting', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const meetingId = req.params.id;
+
+    const { data: meeting, error: meetingError } = await supabase
+      .from('meetings')
+      .select('id')
+      .eq('id', meetingId)
+      .eq('user_id', userId)
+      .single();
+
+    if (meetingError || !meeting) {
+      return res.status(404).json({ ok: false, error: 'Meeting not found.' });
+    }
+
+    await updateMeetingRecord(meetingId, {
+      dismissed_post_meeting_at: new Date().toISOString(),
+      last_lifecycle_evaluated_at: new Date().toISOString()
+    });
+
+    return res.json({
+      ok: true,
+      message: 'Meeting reminder dismissed for now.'
+    });
+  } catch (error) {
+    console.error('Error in POST /api/meetings/:id/dismiss-post-meeting:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to dismiss meeting reminder.' });
+  }
+});
+
+app.post('/api/meetings/import-screenshot', authenticate, async (req, res) => {
+  let uploadedPath = null;
+
+  try {
+    await runScreenshotUploadMiddleware(req, res);
+
+    if (!req.file?.path) {
+      return res.status(400).json({ ok: false, error: 'A screenshot image is required.' });
+    }
+
+    uploadedPath = req.file.path;
+    const extractedMeetings = await extractMeetingsFromScreenshot({
+      filePath: req.file.path,
+      mimeType: req.file.mimetype
+    });
+
+    return res.json({
+      ok: true,
+      meetings: extractedMeetings,
+      fileName: req.file.originalname
+    });
+  } catch (error) {
+    console.error('Error in POST /api/meetings/import-screenshot:', error);
+    return res.status(500).json({ ok: false, error: String(error.message || error) });
+  } finally {
+    if (uploadedPath && fs.existsSync(uploadedPath)) {
+      try {
+        fs.unlinkSync(uploadedPath);
+      } catch (cleanupError) {
+        console.error('Failed to clean up screenshot upload:', cleanupError);
+      }
+    }
+  }
+});
+
+app.post('/api/meetings/import-screenshot/confirm', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const meetings = Array.isArray(req.body?.meetings) ? req.body.meetings : [];
+    const timeZone = sanitizeOptionalString(req.body?.timeZone) || 'UTC';
+
+    if (!meetings.length) {
+      return res.status(400).json({ ok: false, error: 'At least one imported meeting is required.' });
+    }
+
+    const payload = meetings
+      .map((meeting) => normalizeImportedMeetingCandidate(meeting, null, timeZone))
+      .filter(Boolean)
+      .map((meeting) => {
+        const initialStatus = deriveImportedMeetingInitialStatus(meeting, new Date());
+        return {
+          user_id: userId,
+          title: meeting.title,
+          original_filename: null,
+          source_type: 'screenshot',
+          processing_status: 'uploaded',
+          uploaded_at: meeting.meetingStartAt || new Date().toISOString(),
+          meeting_start_at: meeting.meetingStartAt || null,
+          meeting_end_at: meeting.meetingEndAt || meeting.meetingStartAt || null,
+          organizer_name: meeting.organizerName,
+          attendee_summary: meeting.attendeeSummary,
+          external_meeting_url: meeting.externalMeetingUrl,
+          notes: meeting.notes,
+          processing_error: null,
+          status: initialStatus,
+          capture_method: 'none',
+          audio_deleted: false
+        };
+      });
+
+    if (!payload.length) {
+      return res.status(400).json({ ok: false, error: 'No valid meeting candidates were available to import.' });
+    }
+
+    const { data, error } = await supabase
+      .from('meetings')
+      .insert(payload)
+      .select('*');
+
+    if (error) {
+      console.error('Error confirming screenshot-imported meetings:', error);
+      return res.status(500).json({ ok: false, error: 'Failed to import screenshot meetings.' });
+    }
+
+    return res.json({
+      ok: true,
+      message: `${data?.length || payload.length} meetings imported from the screenshot.`,
+      meetings: data || []
+    });
+  } catch (error) {
+    console.error('Error in POST /api/meetings/import-screenshot/confirm:', error);
+    return res.status(500).json({ ok: false, error: String(error.message || error) });
+  }
+});
+
 app.post('/api/meetings', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
     const title = sanitizeOptionalString(req.body?.title);
+    const timeZone = sanitizeOptionalString(req.body?.timeZone) || 'UTC';
+    const normalizedMeetingStartAt = normalizeMeetingDateTimeInput(req.body?.meetingStartAt, timeZone);
+    const normalizedMeetingEndAt = normalizeMeetingDateTimeInput(req.body?.meetingEndAt, timeZone)
+      || normalizedMeetingStartAt;
 
     if (!title) {
       return res.status(400).json({ ok: false, error: 'Meeting title is required.' });
@@ -2807,13 +3975,17 @@ app.post('/api/meetings', authenticate, async (req, res) => {
       original_filename: null,
       source_type: 'manual',
       processing_status: 'uploaded',
-      uploaded_at: req.body?.meetingStartAt || new Date().toISOString(),
-      meeting_start_at: req.body?.meetingStartAt || null,
+      uploaded_at: normalizedMeetingStartAt || new Date().toISOString(),
+      meeting_start_at: normalizedMeetingStartAt || null,
+      meeting_end_at: normalizedMeetingEndAt || null,
       organizer_name: sanitizeOptionalString(req.body?.organizerName),
       attendee_summary: sanitizeOptionalString(req.body?.attendeeSummary),
       external_meeting_url: sanitizeOptionalString(req.body?.externalMeetingUrl),
       notes: sanitizeOptionalString(req.body?.notes),
-      processing_error: null
+      processing_error: null,
+      status: 'scheduled',
+      capture_method: 'none',
+      audio_deleted: false
     };
 
     const { data, error } = await supabase
@@ -2842,6 +4014,10 @@ app.patch('/api/meetings/:id', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
     const title = sanitizeOptionalString(req.body?.title);
+    const timeZone = sanitizeOptionalString(req.body?.timeZone) || 'UTC';
+    const normalizedMeetingStartAt = normalizeMeetingDateTimeInput(req.body?.meetingStartAt, timeZone);
+    const normalizedMeetingEndAt = normalizeMeetingDateTimeInput(req.body?.meetingEndAt, timeZone)
+      || normalizedMeetingStartAt;
 
     if (!title) {
       return res.status(400).json({ ok: false, error: 'Meeting title is required.' });
@@ -2849,8 +4025,9 @@ app.patch('/api/meetings/:id', authenticate, async (req, res) => {
 
     const updates = {
       title,
-      uploaded_at: req.body?.meetingStartAt || new Date().toISOString(),
-      meeting_start_at: req.body?.meetingStartAt || null,
+      uploaded_at: normalizedMeetingStartAt || new Date().toISOString(),
+      meeting_start_at: normalizedMeetingStartAt || null,
+      meeting_end_at: normalizedMeetingEndAt || null,
       organizer_name: sanitizeOptionalString(req.body?.organizerName),
       attendee_summary: sanitizeOptionalString(req.body?.attendeeSummary),
       external_meeting_url: sanitizeOptionalString(req.body?.externalMeetingUrl),
@@ -2863,7 +4040,6 @@ app.patch('/api/meetings/:id', authenticate, async (req, res) => {
       .update(updates)
       .eq('id', req.params.id)
       .eq('user_id', userId)
-      .eq('source_type', 'manual')
       .select('*')
       .single();
 
@@ -2883,6 +4059,214 @@ app.patch('/api/meetings/:id', authenticate, async (req, res) => {
   }
 });
 
+app.delete('/api/meetings/:id', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const meetingId = req.params.id;
+
+    const { data: relatedFiles, error: relatedFilesError } = await supabase
+      .from('files')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('meeting_id', meetingId)
+      .limit(1);
+
+    if (relatedFilesError) {
+      console.error('Error checking related meeting files:', relatedFilesError);
+      return res.status(500).json({ ok: false, error: 'Failed to remove meeting.' });
+    }
+
+    if ((relatedFiles || []).length > 0) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Meetings with linked files cannot be deleted. Archive them instead.'
+      });
+    }
+
+    const { error } = await supabase
+      .from('meetings')
+      .delete()
+      .eq('id', meetingId)
+      .eq('user_id', userId);
+
+    if (error) {
+      console.error('Error deleting meeting:', error);
+      return res.status(500).json({ ok: false, error: 'Failed to delete meeting.' });
+    }
+
+    return res.json({
+      ok: true,
+      message: 'Meeting removed from your schedule.'
+    });
+  } catch (error) {
+    console.error('Error in DELETE /api/meetings/:id:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to delete meeting.' });
+  }
+});
+
+app.post('/api/meetings/dictate/transcribe', authenticate, async (req, res) => {
+  let uploadedPath = null;
+
+  try {
+    await runDictatedNoteUploadMiddleware(req, res);
+    if (!req.file?.path) {
+      return res.status(400).json({ ok: false, error: 'No dictated note audio was uploaded.' });
+    }
+
+    uploadedPath = req.file.path;
+    const transcript = await transcribeDictatedNoteAudio(uploadedPath);
+
+    if (!transcript) {
+      return res.status(422).json({ ok: false, error: 'No speech was detected in that note. Please try again.' });
+    }
+
+    return res.json({
+      ok: true,
+      transcript
+    });
+  } catch (error) {
+    console.error('Error in POST /api/meetings/dictate/transcribe:', error);
+    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        ok: false,
+        error: 'Dictated note audio is too large. Keep each note short and try again.'
+      });
+    }
+    return res.status(500).json({ ok: false, error: String(error.message || error) });
+  } finally {
+    if (uploadedPath && fs.existsSync(uploadedPath)) {
+      try {
+        fs.unlinkSync(uploadedPath);
+      } catch (cleanupError) {
+        console.error('Failed to clean up dictated note upload:', cleanupError);
+      }
+    }
+  }
+});
+
+app.post('/api/meetings/:id/notes', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const meetingId = req.params.id;
+    const notes = sanitizeOptionalString(req.body?.notes);
+    const requestedCaptureMethod = sanitizeOptionalString(req.body?.captureMethod);
+    const captureMethod = requestedCaptureMethod === 'dictated_notes' ? 'dictated_notes' : 'written_notes';
+    const sourceLabel = captureMethod === 'dictated_notes' ? 'DICTATED MEETING NOTES' : 'MEETING NOTES';
+
+    if (!notes) {
+      return res.status(400).json({ ok: false, error: 'Notes are required to complete a meeting without a recording.' });
+    }
+
+    const { data: meeting, error: meetingError } = await supabase
+      .from('meetings')
+      .select('*')
+      .eq('id', meetingId)
+      .eq('user_id', userId)
+      .single();
+
+    if (meetingError || !meeting) {
+      return res.status(404).json({ ok: false, error: 'Meeting not found.' });
+    }
+
+    const summary = await generateStructuredMeetingSummary({
+      sourceLabel,
+      content: notes,
+      meetingContext: {
+        ...meeting,
+        notes
+      }
+    });
+
+    let transcriptFileRecord = null;
+    let transcriptPath = null;
+
+    if (captureMethod === 'dictated_notes') {
+      const safeBaseName = slugifyMeetingFilename(meeting.title || meeting.original_filename || 'meeting-note-transcript');
+      transcriptPath = path.join(OUTPUT_DIR, `${safeBaseName}-${Date.now()}.transcript.txt`);
+      fs.writeFileSync(transcriptPath, `${notes}\n`, 'utf8');
+
+      const transcriptUploadResult = await uploadFile(userId, 'transcripts', transcriptPath, path.basename(transcriptPath));
+      const transcriptFileStats = fs.statSync(transcriptPath);
+      transcriptFileRecord = await insertFileRecord({
+        user_id: userId,
+        meeting_id: meetingId,
+        original_filename: meeting.title || path.basename(transcriptPath),
+        file_type: 'transcript',
+        source_type: 'manual',
+        processing_status: 'transcript_ready',
+        processing_error: null,
+        storage_path: transcriptUploadResult.path,
+        file_size: transcriptFileStats.size,
+        mime_type: 'text/plain',
+        has_transcript: true,
+        has_summary: false,
+        speaker_diarization: false
+      }, { returning: true });
+    }
+
+    const safeBaseName = slugifyMeetingFilename(meeting.title || meeting.original_filename || 'meeting-notes');
+    const summaryPath = path.join(OUTPUT_DIR, `${safeBaseName}-${Date.now()}.notes.summary.md`);
+    fs.writeFileSync(summaryPath, `${summary}\n`, 'utf8');
+
+    const uploadResult = await uploadFile(userId, 'summaries', summaryPath, path.basename(summaryPath));
+    const fileStats = fs.statSync(summaryPath);
+    const summaryFileRecord = await insertFileRecord({
+      user_id: userId,
+      meeting_id: meetingId,
+      original_filename: meeting.title || path.basename(summaryPath),
+      file_type: 'summary',
+      source_type: 'manual',
+      processing_status: 'completed',
+      processing_error: null,
+      storage_path: uploadResult.path,
+      file_size: fileStats.size,
+      mime_type: 'text/plain',
+      has_transcript: false,
+      has_summary: true,
+      action_items_count: (summary.match(/## Action items[\s\S]*?(?=##|$)/i)?.[0]?.match(/^[\s]*-/gm) || []).length
+    }, { returning: true });
+
+    await updateMeetingRecord(meetingId, {
+      notes,
+      status: 'completed',
+      capture_method: captureMethod,
+      processing_status: 'completed',
+      processing_error: null,
+      transcript_file_id: transcriptFileRecord?.id || null,
+      summary_file_id: summaryFileRecord?.id || null
+    });
+    if (transcriptFileRecord) {
+      await ensureAskRecapChunksIndexed(
+        [transcriptFileRecord],
+        new Map([[meetingId, meeting.title || 'Untitled meeting']])
+      );
+    }
+    await syncMeetingInsights(userId, meetingId, meeting.title || 'Untitled meeting', summary);
+    if (summaryFileRecord) {
+      await ensureAskRecapChunksIndexed(
+        [summaryFileRecord],
+        new Map([[meetingId, meeting.title || 'Untitled meeting']])
+      );
+    }
+
+    if (fs.existsSync(summaryPath)) {
+      fs.unlinkSync(summaryPath);
+    }
+    if (transcriptPath && fs.existsSync(transcriptPath)) {
+      fs.unlinkSync(transcriptPath);
+    }
+
+    return res.json({
+      ok: true,
+      message: captureMethod === 'dictated_notes' ? 'Meeting completed with dictated notes.' : 'Meeting completed with notes.',
+      summary
+    });
+  } catch (error) {
+    console.error('Error in POST /api/meetings/:id/notes:', error);
+    return res.status(500).json({ ok: false, error: String(error.message || error) });
+  }
+});
+
 app.post('/api/meetings/:id/archive', authenticate, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -2893,7 +4277,6 @@ app.post('/api/meetings/:id/archive', authenticate, async (req, res) => {
       })
       .eq('id', req.params.id)
       .eq('user_id', req.user.id)
-      .eq('source_type', 'manual')
       .select('id')
       .single();
 
@@ -2919,7 +4302,6 @@ app.post('/api/meetings/:id/restore', authenticate, async (req, res) => {
       })
       .eq('id', req.params.id)
       .eq('user_id', req.user.id)
-      .eq('source_type', 'manual')
       .select('id')
       .single();
 
@@ -3080,7 +4462,7 @@ app.get('/api/files/:id/url', authenticate, async (req, res) => {
 
     const { data: file, error } = await supabase
       .from('files')
-      .select('id, file_type, storage_path, original_filename')
+      .select('id, meeting_id, file_type, storage_path, original_filename')
       .eq('id', req.params.id)
       .eq('user_id', userId)
       .single();
@@ -3156,9 +4538,10 @@ app.get('/api/files/:id/pdf', authenticate, async (req, res) => {
 
     await downloadFile(bucket, file.storage_path, sourcePath);
     const sourceContent = fs.readFileSync(sourcePath, 'utf8');
+    const meetingContext = file.meeting_id ? await getMeetingContext(userId, file.meeting_id) : null;
 
     if (isTranscript) {
-      await generateTranscriptPdf(sourceContent, pdfPath);
+      await generateTranscriptPdf(sourceContent, pdfPath, meetingContext);
     } else {
       await generateSummaryPdf(sourceContent, pdfPath);
     }
@@ -3244,7 +4627,7 @@ app.post('/api/ask-recap/query', authenticate, async (req, res) => {
     if (candidateFiles.length === 0) {
       return res.json({
         ok: true,
-        answer: 'I could not find any matching transcript or summary documents in the current Ask Recap scope yet.',
+        answer: 'I could not find any matching transcript or summary documents in the current Ask Acestar scope yet.',
         citations: [],
         appliedScope: buildAskRecapScopeLabel({ selectedMeetingIds, dateRange })
       });
@@ -3338,7 +4721,7 @@ app.post('/api/ask-recap/query', authenticate, async (req, res) => {
           })
           .filter((chunk) => chunk.score > 0);
       } catch (vectorError) {
-        console.error('Ask Recap vector retrieval unavailable, falling back to keyword retrieval:', vectorError);
+      console.error('Ask Acestar vector retrieval unavailable, falling back to keyword retrieval:', vectorError);
       }
     }
 
@@ -3350,7 +4733,7 @@ app.post('/api/ask-recap/query', authenticate, async (req, res) => {
         try {
           content = await readStoredTextArtifact(file);
         } catch (artifactError) {
-          console.error('Failed to read Ask Recap source artifact:', artifactError);
+          console.error('Failed to read Ask Acestar source artifact:', artifactError);
           continue;
         }
 
@@ -3459,7 +4842,7 @@ app.post('/api/ask-recap/query', authenticate, async (req, res) => {
         .sort((a, b) => b.score - a.score)
         .slice(0, 8);
     } catch (insightsError) {
-      console.error('Failed to load structured meeting insights for Ask Recap:', insightsError);
+      console.error('Failed to load structured meeting insights for Ask Acestar:', insightsError);
     }
 
     const insightIntent = detectInsightIntent(question);
@@ -3512,7 +4895,7 @@ app.post('/api/ask-recap/query', authenticate, async (req, res) => {
     });
   } catch (error) {
     console.error('Error in /api/ask-recap/query:', error);
-    return res.status(500).json({ ok: false, error: 'Ask Recap query failed.' });
+    return res.status(500).json({ ok: false, error: 'Ask Acestar query failed.' });
   }
 });
 
@@ -3570,8 +4953,8 @@ app.get('/api/ask-recap/chats', authenticate, async (req, res) => {
       }))
     });
   } catch (error) {
-    console.error('Error loading Ask Recap chats:', error);
-    return res.status(500).json({ ok: false, error: 'Failed to load Ask Recap chats.' });
+    console.error('Error loading Ask Acestar chats:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to load Ask Acestar chats.' });
   }
 });
 
@@ -3580,15 +4963,15 @@ app.post('/api/ask-recap/backfill', authenticate, async (req, res) => {
     const result = await backfillAskRecapKnowledge(req.user.id);
     return res.json({ ok: true, ...result });
   } catch (error) {
-    console.error('Error backfilling Ask Recap knowledge:', error);
-    return res.status(500).json({ ok: false, error: 'Failed to optimize Ask Recap history.' });
+    console.error('Error backfilling Ask Acestar knowledge:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to optimize Ask Acestar history.' });
   }
 });
 
 app.post('/api/ask-recap/chats', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-    const title = sanitizeOptionalString(req.body?.title) || 'New Ask Recap chat';
+    const title = sanitizeOptionalString(req.body?.title) || 'New Ask Acestar chat';
     const scope = sanitizeOptionalString(req.body?.scope) || 'all';
 
     const { data, error } = await supabase
@@ -3617,8 +5000,8 @@ app.post('/api/ask-recap/chats', authenticate, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error creating Ask Recap chat:', error);
-    return res.status(500).json({ ok: false, error: 'Failed to create Ask Recap chat.' });
+    console.error('Error creating Ask Acestar chat:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to create Ask Acestar chat.' });
   }
 });
 
@@ -3644,13 +5027,13 @@ app.patch('/api/ask-recap/chats/:id', authenticate, async (req, res) => {
       .single();
 
     if (error || !data) {
-      return res.status(404).json({ ok: false, error: 'Ask Recap chat not found.' });
+      return res.status(404).json({ ok: false, error: 'Ask Acestar chat not found.' });
     }
 
     return res.json({ ok: true, chat: data });
   } catch (error) {
-    console.error('Error renaming Ask Recap chat:', error);
-    return res.status(500).json({ ok: false, error: 'Failed to rename Ask Recap chat.' });
+    console.error('Error renaming Ask Acestar chat:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to rename Ask Acestar chat.' });
   }
 });
 
@@ -3658,7 +5041,7 @@ app.put('/api/ask-recap/chats/:id', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
     const chatId = req.params.id;
-    const title = sanitizeOptionalString(req.body?.title) || 'New Ask Recap chat';
+    const title = sanitizeOptionalString(req.body?.title) || 'New Ask Acestar chat';
     const scope = sanitizeOptionalString(req.body?.scope) || 'all';
     const messages = Array.isArray(req.body?.messages)
       ? req.body.messages
@@ -3685,7 +5068,7 @@ app.put('/api/ask-recap/chats/:id', authenticate, async (req, res) => {
       .single();
 
     if (chatError || !chat) {
-      return res.status(404).json({ ok: false, error: 'Ask Recap chat not found.' });
+      return res.status(404).json({ ok: false, error: 'Ask Acestar chat not found.' });
     }
 
     const { error: deleteError } = await supabase
@@ -3710,8 +5093,8 @@ app.put('/api/ask-recap/chats/:id', authenticate, async (req, res) => {
 
     return res.json({ ok: true });
   } catch (error) {
-    console.error('Error saving Ask Recap chat:', error);
-    return res.status(500).json({ ok: false, error: 'Failed to save Ask Recap chat.' });
+    console.error('Error saving Ask Acestar chat:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to save Ask Acestar chat.' });
   }
 });
 
@@ -3732,8 +5115,8 @@ app.delete('/api/ask-recap/chats/:id', authenticate, async (req, res) => {
 
     return res.json({ ok: true });
   } catch (error) {
-    console.error('Error deleting Ask Recap chat:', error);
-    return res.status(500).json({ ok: false, error: 'Failed to delete Ask Recap chat.' });
+    console.error('Error deleting Ask Acestar chat:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to delete Ask Acestar chat.' });
   }
 });
 
@@ -3812,16 +5195,28 @@ function buildPdfFilename(originalFilename, fileType) {
   return `${baseName}${suffix}`;
 }
 
-async function generateTranscriptPdf(transcript, outputPath) {
+async function generateTranscriptPdf(transcript, outputPath, meetingContext = null) {
   const pdfDoc = new PDFDocument();
   const pdfStream = fs.createWriteStream(outputPath);
   pdfDoc.pipe(pdfStream);
 
-  pdfDoc.fontSize(24).font('Helvetica-Bold').text('IBM Recap', { align: 'center' });
-  pdfDoc.moveDown();
-  pdfDoc.fontSize(16).font('Helvetica').text('Meeting Transcript', { align: 'center' });
-  pdfDoc.moveDown();
-  pdfDoc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
+  const transcriptTitle = sanitizeOptionalString(meetingContext?.title) || 'Meeting Transcript';
+  const transcriptHeaderLines = [
+    sanitizeOptionalString(meetingContext?.organizer_name) ? `Organizer: ${meetingContext.organizer_name}` : null,
+    sanitizeOptionalString(meetingContext?.attendee_summary) ? `Attendees: ${meetingContext.attendee_summary}` : null,
+    formatSummaryHeaderDateTime(meetingContext?.meeting_start_at) ? `Meeting start: ${formatSummaryHeaderDateTime(meetingContext?.meeting_start_at)}` : null,
+    formatSummaryHeaderDateTime(meetingContext?.meeting_end_at) ? `Meeting end: ${formatSummaryHeaderDateTime(meetingContext?.meeting_end_at)}` : null
+  ].filter(Boolean);
+
+  pdfDoc.fontSize(22).font('Helvetica-Bold').text(transcriptTitle, { align: 'center' });
+  if (transcriptHeaderLines.length > 0) {
+    pdfDoc.moveDown(0.3);
+    transcriptHeaderLines.forEach((line) => {
+      pdfDoc.fontSize(11).font('Helvetica').text(line, { align: 'center' });
+    });
+  }
+  pdfDoc.moveDown(0.3);
+  pdfDoc.fontSize(10).font('Helvetica').text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
   pdfDoc.moveDown(2);
 
   const lines = transcript.split('\n');
@@ -3880,14 +5275,21 @@ async function generateSummaryPdf(summary, outputPath) {
   const pdfStream = fs.createWriteStream(outputPath);
   pdfDoc.pipe(pdfStream);
 
-  pdfDoc.fontSize(24).font('Helvetica-Bold').text('IBM Recap', { align: 'center' });
-  pdfDoc.moveDown();
-  pdfDoc.fontSize(16).font('Helvetica').text('Meeting Summary', { align: 'center' });
-  pdfDoc.moveDown();
-  pdfDoc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
+  const parsedSummary = extractSummaryDocumentHeader(summary);
+  const summaryContent = parsedSummary.body || String(summary || '').trim();
+
+  pdfDoc.fontSize(22).font('Helvetica-Bold').text(parsedSummary.title || 'Meeting Summary', { align: 'center' });
+  if (parsedSummary.metadataLines.length > 0) {
+    pdfDoc.moveDown(0.3);
+    parsedSummary.metadataLines.forEach((line) => {
+      pdfDoc.fontSize(11).font('Helvetica').text(line, { align: 'center' });
+    });
+  }
+  pdfDoc.moveDown(0.3);
+  pdfDoc.fontSize(10).font('Helvetica').text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
   pdfDoc.moveDown(2);
 
-  const summaryLines = summary.split('\n');
+  const summaryLines = summaryContent.split('\n');
   pdfDoc.fontSize(11).font('Helvetica');
 
   for (const line of summaryLines) {

@@ -8,7 +8,7 @@ const router = express.Router();
 const MICROSOFT_TENANT_ID = process.env.MICROSOFT_TENANT_ID || 'organizations';
 const MICROSOFT_CLIENT_ID = process.env.MICROSOFT_CLIENT_ID || '';
 const MICROSOFT_CLIENT_SECRET = process.env.MICROSOFT_CLIENT_SECRET || '';
-const APP_URL = process.env.APP_URL || 'http://localhost:8787';
+const APP_URL = process.env.APP_URL || 'https://app.acestarai.com';
 const MICROSOFT_REDIRECT_URI = process.env.MICROSOFT_REDIRECT_URI || `${APP_URL.replace(/\/$/, '')}/api/microsoft/callback`;
 const MICROSOFT_SCOPES = [
   'offline_access',
@@ -257,16 +257,16 @@ function renderCallbackPage({ title, message, success }) {
         .status { color: ${statusColor}; font-weight: 700; margin-bottom: 20px; }
         h1 { margin: 0 0 12px 0; font-size: 30px; }
         p { margin: 0 0 24px 0; line-height: 1.6; color: #c6c6c6; }
-        a { display: inline-block; background: #0f62fe; color: white; text-decoration: none; padding: 12px 18px; border-radius: 8px; font-weight: 600; }
+        a { display: inline-block; background: #ff0a4d; color: white; text-decoration: none; padding: 12px 18px; border-radius: 8px; font-weight: 600; }
       </style>
     </head>
     <body>
       <div class="card">
-        <div class="eyebrow">IBM Recap</div>
+        <div class="eyebrow">AcestarAI</div>
         <div class="status">${success ? '✓ Microsoft connected' : '! Connection issue'}</div>
         <h1>${title}</h1>
         <p>${message}</p>
-        <a href="${APP_URL}">Return to IBM Recap</a>
+        <a href="${APP_URL}">Return to AcestarAI</a>
       </div>
     </body>
   </html>`;
@@ -354,7 +354,7 @@ router.get('/callback', async (req, res) => {
         .status(400)
         .send(renderCallbackPage({
           title: 'Microsoft connection link is no longer valid',
-          message: 'Please return to IBM Recap and reconnect your Microsoft account from the Meetings tab.',
+          message: 'Please return to AcestarAI and reconnect your Microsoft account from the Meetings tab.',
           success: false
         }));
     }
@@ -388,7 +388,7 @@ router.get('/callback', async (req, res) => {
 
     return res.send(renderCallbackPage({
       title: 'Your Microsoft calendar is connected',
-      message: 'IBM Recap can now begin loading your Teams meeting schedule in the Meetings tab.',
+      message: 'AcestarAI can now begin loading your Teams meeting schedule in the Meetings tab.',
       success: true
     }));
   } catch (error) {
