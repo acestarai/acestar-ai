@@ -1,12 +1,13 @@
-# IBM Recap
+# AcestarAI
 
-Internal productivity tool for IBM Client Engineering teams.
+AcestarAI is a meeting intelligence workspace for professionals who want to turn meetings into structured, searchable knowledge.
 
-Local React + Node.js web app to:
-1. Record Teams call audio locally
+React + Node.js web app to:
+1. Capture meeting recordings or notes
 2. Transcribe audio using AI
-3. Summarize transcript using AI
-4. Download audio/transcript/summary files as PDFs
+3. Summarize transcripts into structured outputs
+4. Search meeting history with Ask Acestar
+5. Download audio, transcript, and summary files as PDFs
 
 ## Requirements (macOS)
 
@@ -98,10 +99,10 @@ Text versions (`.txt` and `.md`) are also saved for reference.
 
 ## Notes
 
-- **IBM Internal Use Only** - For IBM Client Engineering productivity
+- Built for public use by working professionals and teams
 - Respect company policy and local consent laws for recording
 - High-quality AI transcription with timestamps
 - Structured meeting summaries with action items
-- All files exported as professional PDFs with IBM branding
+- All files exported as professional PDFs with AcestarAI branding
 - No local GPU needed - all processing via cloud API
 # Test
