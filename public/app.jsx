@@ -321,7 +321,7 @@ function MainApp() {
     newlyPendingIds.forEach((meetingId) => {
       const meeting = meetingEntries.find((entry) => entry.id === meetingId);
       const title = meeting?.filename || 'Scheduled meeting needs follow-up';
-      const timeLabel = formatMeetingTimeRange(
+      const timeLabel = formatNotificationMeetingTimeRange(
         meeting?.meetingStartAt,
         meeting?.meetingEndAt,
         meeting?.uploadedAt
@@ -5324,7 +5324,7 @@ function getLocalDateKeyForBrowser(timeZone = 'UTC', date = new Date()) {
   return year && month && day ? `${year}-${month}-${day}` : null;
 }
 
-function formatMeetingTimeRange(startAt, endAt, fallbackAt = null) {
+function formatNotificationMeetingTimeRange(startAt, endAt, fallbackAt = null) {
   const sourceDate = startAt || endAt || fallbackAt;
   if (!sourceDate) return '';
 
