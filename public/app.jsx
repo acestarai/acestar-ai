@@ -28,7 +28,13 @@ function MainApp() {
   const [selectedMeetingContext, setSelectedMeetingContext] = useState(null);
   const [backendModels, setBackendModels] = useState(null);
   const [pendingCompletionMeetingIds, setPendingCompletionMeetingIds] = useState([]);
+  const [browserNotificationsSupported, setBrowserNotificationsSupported] = useState(false);
+  const [browserNotificationPermission, setBrowserNotificationPermission] = useState('default');
+  const [browserNotificationsEnabled, setBrowserNotificationsEnabled] = useState(() => {
+    return localStorage.getItem('browser_notifications_enabled') === 'true';
+  });
   const autoSyncedTimeZoneRef = React.useRef(false);
+  const pendingCompletionBaselineRef = React.useRef(null);
   
   // Main app state (from original)
   const [busy, setBusy] = useState(false);
@@ -206,6 +212,29 @@ function MainApp() {
   }, [token]);
 
   useEffect(() => {
+    const supported = typeof window !== 'undefined' && 'Notification' in window;
+    setBrowserNotificationsSupported(supported);
+    setBrowserNotificationPermission(supported ? Notification.permission : 'unsupported');
+
+    const syncPermission = () => {
+      if (!supported) return;
+      setBrowserNotificationPermission(Notification.permission);
+      if (Notification.permission !== 'granted') {
+        setBrowserNotificationsEnabled(false);
+        localStorage.removeItem('browser_notifications_enabled');
+      }
+    };
+
+    document.addEventListener('visibilitychange', syncPermission);
+    window.addEventListener('focus', syncPermission);
+
+    return () => {
+      document.removeEventListener('visibilitychange', syncPermission);
+      window.removeEventListener('focus', syncPermission);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!token || !accountProfile || autoSyncedTimeZoneRef.current) return;
 
     const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -226,6 +255,44 @@ function MainApp() {
     });
   }, [token, accountProfile?.timeZone]);
 
+  useEffect(() => {
+    if (!token) {
+      pendingCompletionBaselineRef.current = null;
+      return undefined;
+    }
+
+    const pollPendingCompletion = async () => {
+      try {
+        const response = await fetch('/api/meetings/pending-completion', {
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || 'Failed to evaluate pending meeting completions.');
+        }
+        setPendingCompletionMeetingIds(data.meetingIds || []);
+      } catch (error) {
+        console.error('Failed to poll pending meeting completions:', error);
+      }
+    };
+
+    const intervalId = window.setInterval(pollPendingCompletion, 60 * 1000);
+    const handleVisibilityRefresh = () => {
+      if (document.visibilityState === 'visible') {
+        pollPendingCompletion();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityRefresh);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityRefresh);
+    };
+  }, [token]);
+
   const historyEntries = buildHistoryEntries(accountFiles);
   const meetingEntries = buildMeetingEntries(accountMeetings);
   const activeMeetingContext = meetingEntries.find((meeting) => meeting.id === files.meetingId) || selectedMeetingContext || null;
@@ -235,6 +302,81 @@ function MainApp() {
   const transcriptAccuracy = calculateTranscriptAccuracy(historyEntries, backendModels);
   const searchableRecordCount = historyEntries.filter((entry) => ['audio', 'transcript', 'summary'].includes(entry.file_type)).length;
   const accuracyDescription = buildTranscriptAccuracyDescription(historyEntries, backendModels);
+
+  useEffect(() => {
+    if (!browserNotificationsSupported) return;
+    if (!browserNotificationsEnabled || browserNotificationPermission !== 'granted') return;
+
+    const currentPendingIds = Array.isArray(pendingCompletionMeetingIds) ? pendingCompletionMeetingIds : [];
+    const baselineIds = pendingCompletionBaselineRef.current;
+
+    if (!baselineIds) {
+      pendingCompletionBaselineRef.current = [...currentPendingIds];
+      return;
+    }
+
+    const baselineSet = new Set(baselineIds);
+    const newlyPendingIds = currentPendingIds.filter((meetingId) => !baselineSet.has(meetingId));
+
+    newlyPendingIds.forEach((meetingId) => {
+      const meeting = meetingEntries.find((entry) => entry.id === meetingId);
+      const title = meeting?.filename || 'Scheduled meeting needs follow-up';
+      const timeLabel = formatMeetingTimeRange(
+        meeting?.meetingStartAt,
+        meeting?.meetingEndAt,
+        meeting?.uploadedAt
+      );
+      const notification = new Notification('Meeting marked incomplete', {
+        body: `${title}${timeLabel ? ` • ${timeLabel}` : ''}. Add a recording, written notes, or a voice note in AcestarAI.`,
+        tag: `meeting-incomplete-${meetingId}`,
+        renotify: false
+      });
+
+      notification.onclick = () => {
+        window.focus();
+        setActiveTab('meetings');
+        notification.close();
+      };
+    });
+
+    pendingCompletionBaselineRef.current = [...currentPendingIds];
+  }, [
+    pendingCompletionMeetingIds,
+    meetingEntries,
+    browserNotificationsEnabled,
+    browserNotificationPermission,
+    browserNotificationsSupported
+  ]);
+
+  const handleEnableBrowserNotifications = async () => {
+    if (!browserNotificationsSupported) {
+      alert('Browser notifications are not supported in this browser.');
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      setBrowserNotificationPermission(permission);
+      if (permission === 'granted') {
+        localStorage.setItem('browser_notifications_enabled', 'true');
+        setBrowserNotificationsEnabled(true);
+        new Notification('Browser notifications enabled', {
+          body: 'AcestarAI will notify you after scheduled meetings end and still need a recording or notes.'
+        });
+      } else {
+        localStorage.removeItem('browser_notifications_enabled');
+        setBrowserNotificationsEnabled(false);
+      }
+    } catch (error) {
+      console.error('Failed to request browser notification permission:', error);
+      alert('Unable to enable browser notifications in this browser.');
+    }
+  };
+
+  const handleDisableBrowserNotifications = () => {
+    localStorage.removeItem('browser_notifications_enabled');
+    setBrowserNotificationsEnabled(false);
+  };
 
   // Filter files based on search
   const filteredMeetings = meetingEntries.filter(file => {
@@ -472,6 +614,11 @@ function MainApp() {
           accountProfile={accountProfile}
           storageUsage={storageUsage}
           accountLoading={accountLoading}
+          browserNotificationsSupported={browserNotificationsSupported}
+          browserNotificationPermission={browserNotificationPermission}
+          browserNotificationsEnabled={browserNotificationsEnabled}
+          onEnableBrowserNotifications={handleEnableBrowserNotifications}
+          onDisableBrowserNotifications={handleDisableBrowserNotifications}
           onBack={() => setActiveTab('home')}
           refresh={refresh}
         />}
@@ -3452,7 +3599,18 @@ function MeetingsTab({ meetingEntries, pendingCompletionMeetingIds, historyLoadi
   );
 }
 
-function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refresh }) {
+function AccountTab({
+  accountProfile,
+  storageUsage,
+  accountLoading,
+  browserNotificationsSupported,
+  browserNotificationPermission,
+  browserNotificationsEnabled,
+  onEnableBrowserNotifications,
+  onDisableBrowserNotifications,
+  onBack,
+  refresh
+}) {
   const { user, updateAccount } = useAuth();
   const [fullName, setFullName] = React.useState(user?.full_name || '');
   const [defaultTranscriptType, setDefaultTranscriptType] = React.useState('standard');
@@ -3716,6 +3874,50 @@ function AccountTab({ accountProfile, storageUsage, accountLoading, onBack, refr
                 disabled={saving || accountLoading}
               />
             </label>
+
+            <div className="account-preference-card">
+              <div className="account-preference-copy">
+                <div className="account-preference-title">Browser notifications for incomplete meetings</div>
+                <div className="account-preference-description">
+                  Show browser notifications while AcestarAI is open whenever a scheduled meeting ends and still needs a recording, written notes, or a voice note.
+                </div>
+              </div>
+              <div className="account-notification-actions">
+                <span className={`account-inline-badge ${
+                  !browserNotificationsSupported
+                    ? 'disabled'
+                    : browserNotificationsEnabled && browserNotificationPermission === 'granted'
+                      ? 'enabled'
+                      : 'pending'
+                }`}>
+                  {!browserNotificationsSupported
+                    ? 'Unsupported'
+                    : browserNotificationsEnabled && browserNotificationPermission === 'granted'
+                      ? 'Enabled'
+                      : browserNotificationPermission === 'denied'
+                        ? 'Blocked in browser'
+                        : 'Permission required'}
+                </span>
+                <button
+                  type="button"
+                  className="account-secondary-action"
+                  onClick={onEnableBrowserNotifications}
+                  disabled={saving || accountLoading || !browserNotificationsSupported}
+                >
+                  {browserNotificationPermission === 'granted' ? 'Send test notification' : 'Enable notifications'}
+                </button>
+                {browserNotificationsEnabled && browserNotificationPermission === 'granted' && (
+                  <button
+                    type="button"
+                    className="account-secondary-action"
+                    onClick={onDisableBrowserNotifications}
+                    disabled={saving || accountLoading}
+                  >
+                    Disable
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -5120,6 +5322,45 @@ function getLocalDateKeyForBrowser(timeZone = 'UTC', date = new Date()) {
   const month = parts.find((part) => part.type === 'month')?.value;
   const day = parts.find((part) => part.type === 'day')?.value;
   return year && month && day ? `${year}-${month}-${day}` : null;
+}
+
+function formatMeetingTimeRange(startAt, endAt, fallbackAt = null) {
+  const sourceDate = startAt || endAt || fallbackAt;
+  if (!sourceDate) return '';
+
+  const safeDate = (value) => {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const start = safeDate(startAt);
+  const end = safeDate(endAt);
+  const fallback = safeDate(fallbackAt);
+  const base = start || end || fallback;
+
+  if (!base) return '';
+
+  const dateLabel = base.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric'
+  });
+
+  const formatClock = (value) => {
+    if (!value) return null;
+    return value.toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+  };
+
+  const startLabel = formatClock(start);
+  const endLabel = formatClock(end);
+
+  if (startLabel && endLabel) return `${dateLabel}, ${startLabel} to ${endLabel}`;
+  if (startLabel) return `${dateLabel}, ${startLabel}`;
+  if (endLabel) return `${dateLabel}, ${endLabel}`;
+  return dateLabel;
 }
 
 function formatBytes(bytes) {

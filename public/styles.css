@@ -1936,6 +1936,69 @@ body:not(.dark-mode) .account-segmented-option.selected {
   flex-shrink: 0;
 }
 
+.account-notification-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-inline-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.account-inline-badge.enabled {
+  background: rgba(36, 161, 72, 0.14);
+  border: 1px solid rgba(36, 161, 72, 0.45);
+  color: #8be3a8;
+}
+
+.account-inline-badge.pending {
+  background: rgba(255, 131, 43, 0.14);
+  border: 1px solid rgba(255, 131, 43, 0.45);
+  color: #ffd0a0;
+}
+
+.account-inline-badge.disabled {
+  background: rgba(105, 112, 119, 0.18);
+  border: 1px solid rgba(105, 112, 119, 0.45);
+  color: var(--ibm-gray-30);
+}
+
+.account-secondary-action {
+  border: 1px solid var(--ibm-gray-60);
+  background: transparent;
+  color: var(--ibm-gray-10);
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.account-secondary-action:hover:not(:disabled) {
+  border-color: var(--ibm-blue);
+  color: #a6c8ff;
+}
+
+.account-secondary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+body:not(.dark-mode) .account-secondary-action {
+  color: var(--ibm-gray-100);
+  border-color: var(--ibm-gray-30);
+}
+
 .account-select {
   width: 100%;
   padding: 12px 14px;
