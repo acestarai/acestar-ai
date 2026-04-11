@@ -4008,6 +4008,37 @@ app.post('/api/push/unsubscribe', authenticate, async (req, res) => {
   }
 });
 
+app.post('/api/push/test', authenticate, async (req, res) => {
+  try {
+    if (!WEB_PUSH_CONFIGURED) {
+      return res.status(503).json({ ok: false, error: 'Web Push is not configured on the server.' });
+    }
+
+    const delivery = await sendPushNotificationToUser(req.user.id, {
+      title: 'AcestarAI test notification',
+      body: 'Browser push is configured and ready for incomplete-meeting reminders.',
+      tag: `acestar-test-${Date.now()}`,
+      url: `${APP_URL.replace(/\/$/, '')}/?tab=account`
+    });
+
+    if (!delivery.attemptedCount) {
+      return res.status(400).json({
+        ok: false,
+        error: 'No active push subscription was found for this account. Enable browser notifications again first.'
+      });
+    }
+
+    return res.json({
+      ok: true,
+      deliveredCount: delivery.deliveredCount,
+      attemptedCount: delivery.attemptedCount
+    });
+  } catch (error) {
+    console.error('Error in POST /api/push/test:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to send test push notification.' });
+  }
+});
+
 app.post('/api/jobs/meetings/post-meeting-check/run', async (req, res) => {
   const authorization = ensureSchedulerAuthorized(req);
   if (!authorization.ok) {

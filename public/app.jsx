@@ -4035,9 +4035,9 @@ function AccountTab({
 
             <div className="account-preference-card">
               <div className="account-preference-copy">
-                <div className="account-preference-title">Browser notifications for incomplete meetings</div>
+                <div className="account-preference-title">Reminder notifications for incomplete meetings</div>
                 <div className="account-preference-description">
-                  Send browser notifications whenever a scheduled meeting ends and still needs a recording, written notes, or a voice note, even if AcestarAI is in a background tab.
+                  Enable AcestarAI reminders for meetings that have ended and still need a recording, written notes, or a voice note. The in-app reminder toast is launch-ready today, while browser push behavior can vary by browser and operating system.
                 </div>
               </div>
               <div className="account-notification-actions">
@@ -4062,7 +4062,7 @@ function AccountTab({
                   onClick={onEnableBrowserNotifications}
                   disabled={saving || accountLoading || !browserNotificationsSupported}
                 >
-                  {browserNotificationPermission === 'granted' ? 'Send test notification' : 'Enable notifications'}
+                  {browserNotificationPermission === 'granted' ? 'Test reminders' : 'Enable reminders'}
                 </button>
                 {browserNotificationsEnabled && browserNotificationPermission === 'granted' && (
                   <button
