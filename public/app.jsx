@@ -673,7 +673,7 @@ function MainApp() {
               </div>
               <div className="hero-video">
                 <video className="demo-video" controls preload="metadata">
-                  <source src="/ibm-recap-demo.mp4" type="video/mp4" />
+                  <source src="/ibm-recap-demo-web.mp4" type="video/mp4" />
                   Your browser does not support the video tag.
                 </video>
               </div>
