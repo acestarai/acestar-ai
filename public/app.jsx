@@ -35,7 +35,6 @@ function MainApp() {
     return localStorage.getItem('browser_notifications_enabled') === 'true';
   });
   const autoSyncedTimeZoneRef = React.useRef(false);
-  const browserNotificationSessionStartRef = React.useRef(new Date().toISOString());
   
   // Main app state (from original)
   const [busy, setBusy] = useState(false);
@@ -312,11 +311,8 @@ function MainApp() {
     if (!browserNotificationsEnabled || browserNotificationPermission !== 'granted') return;
 
     const seenKeys = new Set(JSON.parse(localStorage.getItem('browser_notifications_seen') || '[]'));
-    const sessionStartedAt = new Date(browserNotificationSessionStartRef.current).getTime();
     const notificationsToDisplay = (pendingCompletionNotifications || []).filter((notification) => {
       if (!notification?.id || !notification?.notifiedAt) return false;
-      const notifiedAtMs = new Date(notification.notifiedAt).getTime();
-      if (Number.isNaN(notifiedAtMs) || notifiedAtMs < sessionStartedAt) return false;
       const key = `${notification.id}:${notification.notifiedAt}`;
       return !seenKeys.has(key);
     });
@@ -366,7 +362,7 @@ function MainApp() {
       setBrowserNotificationPermission(permission);
       if (permission === 'granted') {
         localStorage.setItem('browser_notifications_enabled', 'true');
-        browserNotificationSessionStartRef.current = new Date().toISOString();
+        localStorage.removeItem('browser_notifications_seen');
         setBrowserNotificationsEnabled(true);
         new Notification('Browser notifications enabled', {
           body: 'AcestarAI will notify you after scheduled meetings end and still need a recording or notes.'
