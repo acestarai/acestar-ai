@@ -34,6 +34,7 @@ function MainApp() {
   const [browserNotificationsEnabled, setBrowserNotificationsEnabled] = useState(() => {
     return localStorage.getItem('browser_notifications_enabled') === 'true';
   });
+  const [meetingReminderToasts, setMeetingReminderToasts] = useState([]);
   const autoSyncedTimeZoneRef = React.useRef(false);
   
   // Main app state (from original)
@@ -307,10 +308,7 @@ function MainApp() {
   const accuracyDescription = buildTranscriptAccuracyDescription(historyEntries, backendModels);
 
   useEffect(() => {
-    if (!browserNotificationsSupported) return;
-    if (!browserNotificationsEnabled || browserNotificationPermission !== 'granted') return;
-
-    const seenKeys = new Set(JSON.parse(localStorage.getItem('browser_notifications_seen') || '[]'));
+    const seenKeys = new Set(JSON.parse(localStorage.getItem('meeting_notifications_seen') || '[]'));
     const notificationsToDisplay = (pendingCompletionNotifications || []).filter((notification) => {
       if (!notification?.id || !notification?.notifiedAt) return false;
       const key = `${notification.id}:${notification.notifiedAt}`;
@@ -327,22 +325,43 @@ function MainApp() {
         meeting?.meetingEndAt || pendingNotification.meetingEndAt,
         meeting?.uploadedAt || pendingNotification.uploadedAt
       );
-      const browserNotification = new Notification('Meeting marked incomplete', {
-        body: `${title}${timeLabel ? ` • ${timeLabel}` : ''}. Add a recording, written notes, or a voice note in AcestarAI.`,
-        tag: `meeting-incomplete-${meetingId}`,
-        renotify: false
+      const message = `${title}${timeLabel ? ` • ${timeLabel}` : ''}. Add a recording, written notes, or a voice note in AcestarAI.`;
+
+      setMeetingReminderToasts((current) => {
+        if (current.some((toast) => toast.key === key)) return current;
+        return [
+          ...current,
+          {
+            key,
+            meetingId,
+            title: 'Meeting marked incomplete',
+            message
+          }
+        ];
       });
 
-      browserNotification.onclick = () => {
-        window.focus();
-        setActiveTab('meetings');
-        browserNotification.close();
-      };
+      window.setTimeout(() => {
+        setMeetingReminderToasts((current) => current.filter((toast) => toast.key !== key));
+      }, 12000);
+
+      if (browserNotificationsSupported && browserNotificationsEnabled && browserNotificationPermission === 'granted') {
+        const browserNotification = new Notification('Meeting marked incomplete', {
+          body: message,
+          tag: `meeting-incomplete-${meetingId}`,
+          renotify: false
+        });
+
+        browserNotification.onclick = () => {
+          window.focus();
+          setActiveTab('meetings');
+          browserNotification.close();
+        };
+      }
 
       seenKeys.add(key);
     });
 
-    localStorage.setItem('browser_notifications_seen', JSON.stringify(Array.from(seenKeys).slice(-200)));
+    localStorage.setItem('meeting_notifications_seen', JSON.stringify(Array.from(seenKeys).slice(-200)));
   }, [
     pendingCompletionNotifications,
     meetingEntries,
@@ -362,7 +381,7 @@ function MainApp() {
       setBrowserNotificationPermission(permission);
       if (permission === 'granted') {
         localStorage.setItem('browser_notifications_enabled', 'true');
-        localStorage.removeItem('browser_notifications_seen');
+        localStorage.removeItem('meeting_notifications_seen');
         setBrowserNotificationsEnabled(true);
         new Notification('Browser notifications enabled', {
           body: 'AcestarAI will notify you after scheduled meetings end and still need a recording or notes.'
@@ -380,6 +399,10 @@ function MainApp() {
   const handleDisableBrowserNotifications = () => {
     localStorage.removeItem('browser_notifications_enabled');
     setBrowserNotificationsEnabled(false);
+  };
+
+  const dismissMeetingReminderToast = (key) => {
+    setMeetingReminderToasts((current) => current.filter((toast) => toast.key !== key));
   };
 
   // Filter files based on search
@@ -428,6 +451,37 @@ function MainApp() {
 
   return (
     <div className="app-container">
+      {meetingReminderToasts.length > 0 && (
+        <div className="meeting-reminder-toast-stack" aria-live="polite">
+          {meetingReminderToasts.map((toast) => (
+            <button
+              key={toast.key}
+              type="button"
+              className="meeting-reminder-toast"
+              onClick={() => {
+                setActiveTab('meetings');
+                dismissMeetingReminderToast(toast.key);
+              }}
+            >
+              <div className="meeting-reminder-toast-icon">⏰</div>
+              <div className="meeting-reminder-toast-copy">
+                <div className="meeting-reminder-toast-title">{toast.title}</div>
+                <div className="meeting-reminder-toast-message">{toast.message}</div>
+              </div>
+              <span
+                className="meeting-reminder-toast-close"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  dismissMeetingReminderToast(toast.key);
+                }}
+              >
+                ×
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Header */}
       <header className="app-header">
         <div className="header-left">
