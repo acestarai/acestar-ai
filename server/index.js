@@ -4061,6 +4061,18 @@ app.patch('/api/meetings/:id', authenticate, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Meeting title is required.' });
     }
 
+    const { data: existingMeeting, error: existingMeetingError } = await supabase
+      .from('meetings')
+      .select('id, status, capture_method, meeting_end_at, notified_post_meeting_at, dismissed_post_meeting_at')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+
+    if (existingMeetingError || !existingMeeting) {
+      console.error('Error loading meeting before update:', existingMeetingError);
+      return res.status(404).json({ ok: false, error: 'Meeting workspace not found.' });
+    }
+
     const updates = {
       title,
       uploaded_at: normalizedMeetingStartAt || new Date().toISOString(),
@@ -4072,6 +4084,25 @@ app.patch('/api/meetings/:id', authenticate, async (req, res) => {
       notes: sanitizeOptionalString(req.body?.notes),
       updated_at: new Date().toISOString()
     };
+
+    const newMeetingEndTime = normalizedMeetingEndAt ? new Date(normalizedMeetingEndAt).getTime() : null;
+    const previousMeetingEndTime = existingMeeting.meeting_end_at ? new Date(existingMeeting.meeting_end_at).getTime() : null;
+    const endTimeMoved = (
+      newMeetingEndTime &&
+      !Number.isNaN(newMeetingEndTime) &&
+      newMeetingEndTime !== previousMeetingEndTime
+    );
+    const movedIntoFuture = endTimeMoved && newMeetingEndTime > Date.now();
+    const unresolvedCapture = ['none', null].includes(existingMeeting.capture_method);
+
+    if (movedIntoFuture) {
+      updates.notified_post_meeting_at = null;
+      updates.dismissed_post_meeting_at = null;
+
+      if (['missing', 'scheduled'].includes(existingMeeting.status) && unresolvedCapture) {
+        updates.status = 'scheduled';
+      }
+    }
 
     const { data, error } = await supabase
       .from('meetings')
