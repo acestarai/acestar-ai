@@ -9,6 +9,7 @@ import mime from 'mime-types';
 import multer from 'multer';
 import OpenAI from 'openai';
 import PDFDocument from 'pdfkit';
+import webpush from 'web-push';
 import { fileURLToPath } from 'url';
 import { AssemblyAI } from 'assemblyai';
 
@@ -53,11 +54,19 @@ const POST_MEETING_DISMISS_COOLDOWN_MINUTES = Number(process.env.POST_MEETING_DI
 const SCHEDULER_SECRET = process.env.SCHEDULER_SECRET || '';
 const MORNING_REMINDER_HOUR = Number(process.env.MORNING_REMINDER_HOUR || 8);
 const END_OF_DAY_DIGEST_HOUR = Number(process.env.END_OF_DAY_DIGEST_HOUR || 18);
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:noreply@acestarai.com';
 
 // Diarization service configuration (local Pyannote - optional)
 const DIARIZATION_URL = process.env.DIARIZATION_URL || 'http://localhost:5000';
 const MAX_UPLOAD_FILE_SIZE_MB = Number(process.env.MAX_UPLOAD_FILE_SIZE_MB || 500);
 const MAX_UPLOAD_FILE_SIZE_BYTES = MAX_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
+
+const WEB_PUSH_CONFIGURED = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_SUBJECT);
+if (WEB_PUSH_CONFIGURED) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+}
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -195,6 +204,7 @@ console.log('🔧 Service Configuration:');
 console.log(`  OpenAI: ${openai ? '✅ Configured' : '❌ Not configured'}`);
 console.log(`  OpenRouter: ${openrouter ? '✅ Configured' : '❌ Not configured'}`);
 console.log(`  AssemblyAI: ${assemblyai ? '✅ Configured' : '❌ Not configured'}`);
+console.log(`  Web Push: ${WEB_PUSH_CONFIGURED ? '✅ Configured' : '❌ Not configured'}`);
 
 const jobs = new Map();
 
@@ -460,6 +470,178 @@ function getLocalHour(dateLike, timeZone = 'UTC') {
   return hour ? Number(hour) : null;
 }
 
+function formatNotificationMeetingTimeRange(startIso, endIso, fallbackIso = null) {
+  const safeDate = (value) => {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const start = safeDate(startIso);
+  const end = safeDate(endIso);
+  const fallback = safeDate(fallbackIso);
+  const base = start || end || fallback;
+
+  if (!base) return '';
+
+  const dateLabel = base.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric'
+  });
+
+  const formatClock = (value) => value ? value.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit'
+  }) : null;
+
+  const startLabel = formatClock(start);
+  const endLabel = formatClock(end);
+
+  if (startLabel && endLabel) return `${dateLabel}, ${startLabel} to ${endLabel}`;
+  if (startLabel) return `${dateLabel}, ${startLabel}`;
+  if (endLabel) return `${dateLabel}, ${endLabel}`;
+  return dateLabel;
+}
+
+function sanitizePushSubscription(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const endpoint = typeof payload.endpoint === 'string' ? payload.endpoint.trim() : '';
+  const keys = payload.keys && typeof payload.keys === 'object' ? payload.keys : {};
+  const p256dh = typeof keys.p256dh === 'string' ? keys.p256dh.trim() : '';
+  const auth = typeof keys.auth === 'string' ? keys.auth.trim() : '';
+
+  if (!endpoint || !p256dh || !auth) {
+    return null;
+  }
+
+  return {
+    endpoint,
+    expirationTime: payload.expirationTime ?? null,
+    keys: {
+      p256dh,
+      auth
+    }
+  };
+}
+
+async function savePushSubscription(userId, subscription, userAgent = null) {
+  const sanitized = sanitizePushSubscription(subscription);
+  if (!sanitized || !userId) {
+    return false;
+  }
+
+  try {
+    const payload = {
+      user_id: userId,
+      endpoint: sanitized.endpoint,
+      subscription: sanitized,
+      user_agent: userAgent,
+      enabled: true,
+      updated_at: new Date().toISOString(),
+      last_used_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('push_subscriptions')
+      .upsert(payload, { onConflict: 'endpoint' });
+
+    if (error) {
+      if (isMissingRelation(error, 'push_subscriptions')) {
+        return false;
+      }
+      throw error;
+    }
+
+    return true;
+  } catch (error) {
+    if (!isMissingRelation(error, 'push_subscriptions')) {
+      console.error('Failed to save push subscription:', error);
+    }
+    return false;
+  }
+}
+
+async function removePushSubscription(userId, endpoint) {
+  if (!userId || !endpoint) return false;
+
+  try {
+    const { error } = await supabase
+      .from('push_subscriptions')
+      .delete()
+      .eq('user_id', userId)
+      .eq('endpoint', endpoint);
+
+    if (error) {
+      if (isMissingRelation(error, 'push_subscriptions')) {
+        return false;
+      }
+      throw error;
+    }
+
+    return true;
+  } catch (error) {
+    if (!isMissingRelation(error, 'push_subscriptions')) {
+      console.error('Failed to remove push subscription:', error);
+    }
+    return false;
+  }
+}
+
+async function sendPushNotificationToUser(userId, payload) {
+  if (!WEB_PUSH_CONFIGURED || !userId) {
+    return { deliveredCount: 0, attemptedCount: 0, skipped: true };
+  }
+
+  try {
+    const { data: subscriptions, error } = await supabase
+      .from('push_subscriptions')
+      .select('id, endpoint, subscription')
+      .eq('user_id', userId)
+      .eq('enabled', true);
+
+    if (error) {
+      if (isMissingRelation(error, 'push_subscriptions')) {
+        return { deliveredCount: 0, attemptedCount: 0, skipped: true };
+      }
+      throw error;
+    }
+
+    let deliveredCount = 0;
+    const attemptedSubscriptions = subscriptions || [];
+
+    for (const subscriptionRow of attemptedSubscriptions) {
+      try {
+        await webpush.sendNotification(subscriptionRow.subscription, JSON.stringify(payload));
+        deliveredCount += 1;
+        await supabase
+          .from('push_subscriptions')
+          .update({ last_used_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('id', subscriptionRow.id);
+      } catch (error) {
+        const statusCode = Number(error?.statusCode || 0);
+        if (statusCode === 404 || statusCode === 410) {
+          await supabase
+            .from('push_subscriptions')
+            .delete()
+            .eq('id', subscriptionRow.id);
+        } else {
+          console.error('Failed to send Web Push notification:', error);
+        }
+      }
+    }
+
+    return {
+      deliveredCount,
+      attemptedCount: attemptedSubscriptions.length,
+      skipped: false
+    };
+  } catch (error) {
+    console.error('Failed to deliver push notifications:', error);
+    return { deliveredCount: 0, attemptedCount: 0, skipped: false, error: String(error?.message || error) };
+  }
+}
+
 function getTimeZoneOffsetMs(date, timeZone = 'UTC') {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone,
@@ -603,11 +785,13 @@ async function evaluatePendingCompletionMeetingIds(userId, now = new Date()) {
 
     pendingNotifications.push({
       id: meeting.id,
+      userId,
       title: meeting.title || null,
       meetingStartAt: meeting.meeting_start_at || null,
       meetingEndAt: meeting.meeting_end_at || null,
       uploadedAt: meeting.uploaded_at || null,
-      notifiedAt: meeting.notified_post_meeting_at || nowIso
+      notifiedAt: meeting.notified_post_meeting_at || nowIso,
+      isNewlyNotified: Boolean(patch.notified_post_meeting_at)
     });
   }
 
@@ -682,10 +866,23 @@ async function runPostMeetingCompletionSweep(now = new Date()) {
     notifications.push(...(pendingResult.notifications || []));
   }
 
-  for (const meeting of candidateMeetings || []) {
-    if (pendingMeetingIds.includes(meeting.id) && !meeting.notified_post_meeting_at) {
-      notifiedCount += 1;
-    }
+  const newlyNotifiedMeetings = notifications.filter((notification) => notification.isNewlyNotified);
+  notifiedCount = newlyNotifiedMeetings.length;
+
+  for (const notification of newlyNotifiedMeetings) {
+    const timeLabel = formatNotificationMeetingTimeRange(
+      notification.meetingStartAt,
+      notification.meetingEndAt,
+      notification.uploadedAt
+    );
+    const body = `${notification.title || 'Scheduled meeting'}${timeLabel ? ` • ${timeLabel}` : ''}. Add a recording, written notes, or a voice note in AcestarAI.`;
+
+    await sendPushNotificationToUser(notification.userId, {
+      title: 'Meeting marked incomplete',
+      body,
+      tag: `meeting-incomplete-${notification.id}`,
+      url: `${APP_URL.replace(/\/$/, '')}/?tab=meetings`
+    });
   }
 
   return {
@@ -3754,6 +3951,60 @@ app.get('/api/meetings/pending-completion', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Error in GET /api/meetings/pending-completion:', error);
     return res.status(500).json({ ok: false, error: 'Failed to evaluate pending meeting completions.' });
+  }
+});
+
+app.get('/api/push/public-key', authenticate, async (_req, res) => {
+  if (!WEB_PUSH_CONFIGURED) {
+    return res.status(503).json({ ok: false, error: 'Web Push is not configured on the server.' });
+  }
+
+  return res.json({
+    ok: true,
+    publicKey: VAPID_PUBLIC_KEY
+  });
+});
+
+app.post('/api/push/subscribe', authenticate, async (req, res) => {
+  try {
+    if (!WEB_PUSH_CONFIGURED) {
+      return res.status(503).json({ ok: false, error: 'Web Push is not configured on the server.' });
+    }
+
+    const subscription = sanitizePushSubscription(req.body?.subscription);
+    if (!subscription) {
+      return res.status(400).json({ ok: false, error: 'A valid push subscription is required.' });
+    }
+
+    const saved = await savePushSubscription(
+      req.user.id,
+      subscription,
+      typeof req.body?.userAgent === 'string' ? req.body.userAgent.slice(0, 512) : null
+    );
+
+    if (!saved) {
+      return res.status(503).json({ ok: false, error: 'Push subscriptions are not available yet.' });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Error in POST /api/push/subscribe:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to save push subscription.' });
+  }
+});
+
+app.post('/api/push/unsubscribe', authenticate, async (req, res) => {
+  try {
+    const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint.trim() : '';
+    if (!endpoint) {
+      return res.status(400).json({ ok: false, error: 'A push subscription endpoint is required.' });
+    }
+
+    await removePushSubscription(req.user.id, endpoint);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error('Error in POST /api/push/unsubscribe:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to remove push subscription.' });
   }
 });
 

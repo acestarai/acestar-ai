@@ -252,6 +252,82 @@ function MainApp() {
       });
   }, []);
 
+  const ensureWebPushSubscription = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      throw new Error('Push notifications are not supported in this browser.');
+    }
+
+    const authToken = localStorage.getItem('auth_token');
+    if (!authToken) {
+      throw new Error('Authentication is required to enable push notifications.');
+    }
+
+    const keyResponse = await fetch('/api/push/public-key', {
+      headers: {
+        Authorization: `Bearer ${authToken}`
+      }
+    });
+    const keyData = await keyResponse.json();
+    if (!keyResponse.ok || !keyData.ok || !keyData.publicKey) {
+      throw new Error(keyData.error || 'Web Push is not configured on the server.');
+    }
+
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(keyData.publicKey)
+      });
+    }
+
+    const subscribeResponse = await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${authToken}`
+      },
+      body: JSON.stringify({
+        subscription,
+        userAgent: navigator.userAgent
+      })
+    });
+    const subscribeData = await subscribeResponse.json();
+    if (!subscribeResponse.ok || !subscribeData.ok) {
+      throw new Error(subscribeData.error || 'Failed to save push subscription.');
+    }
+
+    return subscription;
+  };
+
+  const removeWebPushSubscription = async () => {
+    if (!('serviceWorker' in navigator)) return;
+
+    const authToken = localStorage.getItem('auth_token');
+    const registration = await navigator.serviceWorker.ready.catch(() => null);
+    const subscription = registration ? await registration.pushManager.getSubscription() : null;
+
+    if (subscription && authToken) {
+      await fetch('/api/push/unsubscribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          endpoint: subscription.endpoint
+        })
+      }).catch((error) => {
+        console.error('Failed to remove push subscription on server:', error);
+      });
+
+      await subscription.unsubscribe().catch((error) => {
+        console.error('Failed to unsubscribe local push subscription:', error);
+      });
+    }
+  };
+
   useEffect(() => {
     if (!token || !accountProfile || autoSyncedTimeZoneRef.current) return;
 
@@ -272,6 +348,16 @@ function MainApp() {
       autoSyncedTimeZoneRef.current = false;
     });
   }, [token, accountProfile?.timeZone]);
+
+  useEffect(() => {
+    if (!browserNotificationsEnabled || browserNotificationPermission !== 'granted' || !notificationServiceWorkerReady) {
+      return;
+    }
+
+    ensureWebPushSubscription().catch((error) => {
+      console.error('Failed to ensure push subscription:', error);
+    });
+  }, [browserNotificationsEnabled, browserNotificationPermission, notificationServiceWorkerReady]);
 
   useEffect(() => {
     if (!token) {
@@ -359,38 +445,6 @@ function MainApp() {
         setMeetingReminderToasts((current) => current.filter((toast) => toast.key !== key));
       }, 12000);
 
-      if (browserNotificationsSupported && browserNotificationsEnabled && browserNotificationPermission === 'granted') {
-        const notificationOptions = {
-          body: message,
-          tag: `meeting-incomplete-${meetingId}`,
-          renotify: false,
-          data: {
-            url: '/?tab=meetings'
-          }
-        };
-
-        if (notificationServiceWorkerReady && navigator.serviceWorker?.ready) {
-          navigator.serviceWorker.ready
-            .then((registration) => registration.showNotification('Meeting marked incomplete', notificationOptions))
-            .catch((error) => {
-              console.error('Failed to show service worker notification:', error);
-              const browserNotification = new Notification('Meeting marked incomplete', notificationOptions);
-              browserNotification.onclick = () => {
-                window.focus();
-                setActiveTab('meetings');
-                browserNotification.close();
-              };
-            });
-        } else {
-          const browserNotification = new Notification('Meeting marked incomplete', notificationOptions);
-          browserNotification.onclick = () => {
-            window.focus();
-            setActiveTab('meetings');
-            browserNotification.close();
-          };
-        }
-      }
-
       seenKeys.add(key);
     });
 
@@ -398,10 +452,6 @@ function MainApp() {
   }, [
     pendingCompletionNotifications,
     meetingEntries,
-    browserNotificationsEnabled,
-    browserNotificationPermission,
-    browserNotificationsSupported,
-    notificationServiceWorkerReady
   ]);
 
   const handleEnableBrowserNotifications = async () => {
@@ -414,6 +464,7 @@ function MainApp() {
       const permission = await Notification.requestPermission();
       setBrowserNotificationPermission(permission);
       if (permission === 'granted') {
+        await ensureWebPushSubscription();
         localStorage.setItem('browser_notifications_enabled', 'true');
         localStorage.removeItem('meeting_notifications_seen');
         setBrowserNotificationsEnabled(true);
@@ -445,6 +496,9 @@ function MainApp() {
   const handleDisableBrowserNotifications = () => {
     localStorage.removeItem('browser_notifications_enabled');
     setBrowserNotificationsEnabled(false);
+    removeWebPushSubscription().catch((error) => {
+      console.error('Failed to remove web push subscription:', error);
+    });
   };
 
   const dismissMeetingReminderToast = (key) => {
@@ -3983,7 +4037,7 @@ function AccountTab({
               <div className="account-preference-copy">
                 <div className="account-preference-title">Browser notifications for incomplete meetings</div>
                 <div className="account-preference-description">
-                  Show browser notifications while AcestarAI is open whenever a scheduled meeting ends and still needs a recording, written notes, or a voice note.
+                  Send browser notifications whenever a scheduled meeting ends and still needs a recording, written notes, or a voice note, even if AcestarAI is in a background tab.
                 </div>
               </div>
               <div className="account-notification-actions">
@@ -5465,6 +5519,16 @@ function formatNotificationMeetingTimeRange(startAt, endAt, fallbackAt = null) {
   if (startLabel) return `${dateLabel}, ${startLabel}`;
   if (endLabel) return `${dateLabel}, ${endLabel}`;
   return dateLabel;
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const normalized = (base64String + padding)
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+
+  const rawData = window.atob(normalized);
+  return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
 }
 
 function formatBytes(bytes) {
