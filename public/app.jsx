@@ -34,6 +34,7 @@ function MainApp() {
   const [browserNotificationsEnabled, setBrowserNotificationsEnabled] = useState(() => {
     return localStorage.getItem('browser_notifications_enabled') === 'true';
   });
+  const [notificationServiceWorkerReady, setNotificationServiceWorkerReady] = useState(false);
   const [meetingReminderToasts, setMeetingReminderToasts] = useState([]);
   const autoSyncedTimeZoneRef = React.useRef(false);
   
@@ -238,6 +239,20 @@ function MainApp() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker.register('/notification-sw.js')
+      .then(() => navigator.serviceWorker.ready)
+      .then(() => {
+        setNotificationServiceWorkerReady(true);
+      })
+      .catch((error) => {
+        console.error('Failed to register notification service worker:', error);
+        setNotificationServiceWorkerReady(false);
+      });
+  }, []);
+
+  useEffect(() => {
     if (!token || !accountProfile || autoSyncedTimeZoneRef.current) return;
 
     const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -345,17 +360,35 @@ function MainApp() {
       }, 12000);
 
       if (browserNotificationsSupported && browserNotificationsEnabled && browserNotificationPermission === 'granted') {
-        const browserNotification = new Notification('Meeting marked incomplete', {
+        const notificationOptions = {
           body: message,
           tag: `meeting-incomplete-${meetingId}`,
-          renotify: false
-        });
-
-        browserNotification.onclick = () => {
-          window.focus();
-          setActiveTab('meetings');
-          browserNotification.close();
+          renotify: false,
+          data: {
+            url: '/?tab=meetings'
+          }
         };
+
+        if (notificationServiceWorkerReady && navigator.serviceWorker?.ready) {
+          navigator.serviceWorker.ready
+            .then((registration) => registration.showNotification('Meeting marked incomplete', notificationOptions))
+            .catch((error) => {
+              console.error('Failed to show service worker notification:', error);
+              const browserNotification = new Notification('Meeting marked incomplete', notificationOptions);
+              browserNotification.onclick = () => {
+                window.focus();
+                setActiveTab('meetings');
+                browserNotification.close();
+              };
+            });
+        } else {
+          const browserNotification = new Notification('Meeting marked incomplete', notificationOptions);
+          browserNotification.onclick = () => {
+            window.focus();
+            setActiveTab('meetings');
+            browserNotification.close();
+          };
+        }
       }
 
       seenKeys.add(key);
@@ -367,7 +400,8 @@ function MainApp() {
     meetingEntries,
     browserNotificationsEnabled,
     browserNotificationPermission,
-    browserNotificationsSupported
+    browserNotificationsSupported,
+    notificationServiceWorkerReady
   ]);
 
   const handleEnableBrowserNotifications = async () => {
@@ -383,9 +417,21 @@ function MainApp() {
         localStorage.setItem('browser_notifications_enabled', 'true');
         localStorage.removeItem('meeting_notifications_seen');
         setBrowserNotificationsEnabled(true);
-        new Notification('Browser notifications enabled', {
-          body: 'AcestarAI will notify you after scheduled meetings end and still need a recording or notes.'
-        });
+        const introOptions = {
+          body: 'AcestarAI will notify you after scheduled meetings end and still need a recording or notes.',
+          data: {
+            url: '/?tab=account'
+          }
+        };
+        if (notificationServiceWorkerReady && navigator.serviceWorker?.ready) {
+          navigator.serviceWorker.ready
+            .then((registration) => registration.showNotification('Browser notifications enabled', introOptions))
+            .catch(() => {
+              new Notification('Browser notifications enabled', introOptions);
+            });
+        } else {
+          new Notification('Browser notifications enabled', introOptions);
+        }
       } else {
         localStorage.removeItem('browser_notifications_enabled');
         setBrowserNotificationsEnabled(false);
