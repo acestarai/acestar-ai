@@ -16,7 +16,7 @@ import { AssemblyAI } from 'assemblyai';
 import authRoutes from './routes/auth.js';
 import microsoftRoutes from './routes/microsoft.js';
 import { authenticate, optionalAuthenticate } from './auth/middleware.js';
-import { sendMorningPlanningReminderEmail, sendEndOfDayDigestEmail } from './auth/email.js';
+import { sendMorningPlanningReminderEmail, sendEndOfDayDigestEmail, isBlockedLegacyEmail } from './auth/email.js';
 
 // Import Supabase client and storage utilities
 import { supabase } from './auth/supabase.js';
@@ -564,7 +564,7 @@ function isPendingCompletionMeeting(meeting, now = new Date()) {
 async function evaluatePendingCompletionMeetingIds(userId, now = new Date()) {
   const { data: meetings, error } = await supabase
     .from('meetings')
-    .select('id, status, archived_at, meeting_end_at, dismissed_post_meeting_at, notified_post_meeting_at')
+    .select('id, status, archived_at, title, meeting_start_at, meeting_end_at, uploaded_at, dismissed_post_meeting_at, notified_post_meeting_at')
     .eq('user_id', userId)
     .is('archived_at', null)
     .not('meeting_end_at', 'is', null)
@@ -576,6 +576,7 @@ async function evaluatePendingCompletionMeetingIds(userId, now = new Date()) {
 
   const pendingMeetings = (meetings || []).filter((meeting) => isPendingCompletionMeeting(meeting, now));
   const nowIso = now.toISOString();
+  const pendingNotifications = [];
 
   for (const meeting of pendingMeetings) {
     const patch = {};
@@ -592,10 +593,60 @@ async function evaluatePendingCompletionMeetingIds(userId, now = new Date()) {
     if (Object.keys(patch).length > 0) {
       patch.last_lifecycle_evaluated_at = nowIso;
       await updateMeetingRecord(meeting.id, patch);
+      if (patch.notified_post_meeting_at) {
+        meeting.notified_post_meeting_at = patch.notified_post_meeting_at;
+      }
+      if (Object.prototype.hasOwnProperty.call(patch, 'dismissed_post_meeting_at')) {
+        meeting.dismissed_post_meeting_at = patch.dismissed_post_meeting_at;
+      }
     }
+
+    pendingNotifications.push({
+      id: meeting.id,
+      title: meeting.title || null,
+      meetingStartAt: meeting.meeting_start_at || null,
+      meetingEndAt: meeting.meeting_end_at || null,
+      uploadedAt: meeting.uploaded_at || null,
+      notifiedAt: meeting.notified_post_meeting_at || nowIso
+    });
   }
 
-  return pendingMeetings.map((meeting) => meeting.id);
+  return {
+    meetingIds: pendingMeetings.map((meeting) => meeting.id),
+    notifications: pendingNotifications
+  };
+}
+
+async function reserveUserDailyReminder(userId, columnName, targetDate) {
+  const reservePayload = { [columnName]: targetDate };
+
+  const nullReservation = await supabase
+    .from('users')
+    .update(reservePayload)
+    .eq('id', userId)
+    .is(columnName, null)
+    .select('id');
+
+  if (nullReservation.error) {
+    throw nullReservation.error;
+  }
+
+  if ((nullReservation.data || []).length > 0) {
+    return true;
+  }
+
+  const changedReservation = await supabase
+    .from('users')
+    .update(reservePayload)
+    .eq('id', userId)
+    .neq(columnName, targetDate)
+    .select('id');
+
+  if (changedReservation.error) {
+    throw changedReservation.error;
+  }
+
+  return (changedReservation.data || []).length > 0;
 }
 
 async function runPostMeetingCompletionSweep(now = new Date()) {
@@ -622,11 +673,13 @@ async function runPostMeetingCompletionSweep(now = new Date()) {
   let pendingCount = 0;
   let notifiedCount = 0;
   const pendingMeetingIds = [];
+  const notifications = [];
 
   for (const [userId] of meetingsByUserId.entries()) {
-    const pendingIds = await evaluatePendingCompletionMeetingIds(userId, now);
-    pendingCount += pendingIds.length;
-    pendingMeetingIds.push(...pendingIds);
+    const pendingResult = await evaluatePendingCompletionMeetingIds(userId, now);
+    pendingCount += pendingResult.meetingIds.length;
+    pendingMeetingIds.push(...pendingResult.meetingIds);
+    notifications.push(...(pendingResult.notifications || []));
   }
 
   for (const meeting of candidateMeetings || []) {
@@ -638,7 +691,8 @@ async function runPostMeetingCompletionSweep(now = new Date()) {
   return {
     pendingCount,
     notifiedCount,
-    pendingMeetingIds
+    pendingMeetingIds,
+    notifications
   };
 }
 
@@ -735,6 +789,7 @@ async function runMorningPlanningReminderSweep(now = new Date()) {
 
   for (const user of users || []) {
     if (user.morning_planning_email_enabled === false) continue;
+    if (isBlockedLegacyEmail(user.email)) continue;
 
     const timeZone = normalizeTimeZone(user.time_zone);
     const localHour = getLocalHour(now, timeZone);
@@ -761,12 +816,12 @@ async function runMorningPlanningReminderSweep(now = new Date()) {
     });
 
     if (meetingsForTargetDate.length > 0) {
-      await supabase
-        .from('users')
-        .update({ last_morning_planning_email_date: targetDate })
-        .eq('id', user.id);
+      await reserveUserDailyReminder(user.id, 'last_morning_planning_email_date', targetDate);
       continue;
     }
+
+    const reserved = await reserveUserDailyReminder(user.id, 'last_morning_planning_email_date', targetDate);
+    if (!reserved) continue;
 
     await sendMorningPlanningReminderEmail(user.email, {
       fullName: user.full_name,
@@ -774,15 +829,6 @@ async function runMorningPlanningReminderSweep(now = new Date()) {
       targetDate,
       meetingsUrl: `${APP_URL}/?tab=meetings`
     });
-
-    const { error: updateError } = await supabase
-      .from('users')
-      .update({ last_morning_planning_email_date: targetDate })
-      .eq('id', user.id);
-
-    if (updateError) {
-      throw updateError;
-    }
 
     sentCount += 1;
     sentUserIds.push(user.id);
@@ -812,6 +858,7 @@ async function runEndOfDayDigestSweep(now = new Date()) {
 
   for (const user of users || []) {
     if (user.end_of_day_digest_enabled === false) continue;
+    if (isBlockedLegacyEmail(user.email)) continue;
 
     const timeZone = normalizeTimeZone(user.time_zone);
     const localHour = getLocalHour(now, timeZone);
@@ -822,6 +869,9 @@ async function runEndOfDayDigestSweep(now = new Date()) {
 
     eligibleCount += 1;
 
+    const reserved = await reserveUserDailyReminder(user.id, 'last_end_of_day_digest_date', targetDate);
+    if (!reserved) continue;
+
     const result = await evaluateEndOfDayReviewForUser(user.id, {
       timeZone,
       targetDate,
@@ -829,10 +879,6 @@ async function runEndOfDayDigestSweep(now = new Date()) {
     });
 
     if ((result.summary.total || 0) === 0) {
-      await supabase
-        .from('users')
-        .update({ last_end_of_day_digest_date: targetDate })
-        .eq('id', user.id);
       continue;
     }
 
@@ -849,15 +895,6 @@ async function runEndOfDayDigestSweep(now = new Date()) {
         .from('meetings')
         .update({ included_in_daily_digest_at: now.toISOString() })
         .in('id', result.relevantMeetingIds);
-    }
-
-    const { error: updateError } = await supabase
-      .from('users')
-      .update({ last_end_of_day_digest_date: targetDate })
-      .eq('id', user.id);
-
-    if (updateError) {
-      throw updateError;
     }
 
     sentCount += 1;
@@ -3706,11 +3743,12 @@ app.get('/api/meetings', authenticate, async (req, res) => {
 app.get('/api/meetings/pending-completion', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-    const meetingIds = await evaluatePendingCompletionMeetingIds(userId, new Date());
+    const result = await evaluatePendingCompletionMeetingIds(userId, new Date());
 
     return res.json({
       ok: true,
-      meetingIds,
+      meetingIds: result.meetingIds,
+      notifications: result.notifications || [],
       evaluatedAt: new Date().toISOString()
     });
   } catch (error) {

@@ -28,13 +28,14 @@ function MainApp() {
   const [selectedMeetingContext, setSelectedMeetingContext] = useState(null);
   const [backendModels, setBackendModels] = useState(null);
   const [pendingCompletionMeetingIds, setPendingCompletionMeetingIds] = useState([]);
+  const [pendingCompletionNotifications, setPendingCompletionNotifications] = useState([]);
   const [browserNotificationsSupported, setBrowserNotificationsSupported] = useState(false);
   const [browserNotificationPermission, setBrowserNotificationPermission] = useState('default');
   const [browserNotificationsEnabled, setBrowserNotificationsEnabled] = useState(() => {
     return localStorage.getItem('browser_notifications_enabled') === 'true';
   });
   const autoSyncedTimeZoneRef = React.useRef(false);
-  const pendingCompletionBaselineRef = React.useRef(null);
+  const browserNotificationSessionStartRef = React.useRef(new Date().toISOString());
   
   // Main app state (from original)
   const [busy, setBusy] = useState(false);
@@ -194,9 +195,11 @@ function MainApp() {
         const pendingJson = await pendingResponse.json();
         if (pendingResponse.ok && pendingJson.ok) {
           setPendingCompletionMeetingIds(pendingJson.meetingIds || []);
+          setPendingCompletionNotifications(pendingJson.notifications || []);
         } else {
           console.error('Failed to load pending meeting completions:', pendingJson.error);
           setPendingCompletionMeetingIds([]);
+          setPendingCompletionNotifications([]);
         }
       }
     } catch (error) {
@@ -257,7 +260,7 @@ function MainApp() {
 
   useEffect(() => {
     if (!token) {
-      pendingCompletionBaselineRef.current = null;
+      setPendingCompletionNotifications([]);
       return undefined;
     }
 
@@ -273,6 +276,7 @@ function MainApp() {
           throw new Error(data.error || 'Failed to evaluate pending meeting completions.');
         }
         setPendingCompletionMeetingIds(data.meetingIds || []);
+        setPendingCompletionNotifications(data.notifications || []);
       } catch (error) {
         console.error('Failed to poll pending meeting completions:', error);
       }
@@ -307,41 +311,44 @@ function MainApp() {
     if (!browserNotificationsSupported) return;
     if (!browserNotificationsEnabled || browserNotificationPermission !== 'granted') return;
 
-    const currentPendingIds = Array.isArray(pendingCompletionMeetingIds) ? pendingCompletionMeetingIds : [];
-    const baselineIds = pendingCompletionBaselineRef.current;
+    const seenKeys = new Set(JSON.parse(localStorage.getItem('browser_notifications_seen') || '[]'));
+    const sessionStartedAt = new Date(browserNotificationSessionStartRef.current).getTime();
+    const notificationsToDisplay = (pendingCompletionNotifications || []).filter((notification) => {
+      if (!notification?.id || !notification?.notifiedAt) return false;
+      const notifiedAtMs = new Date(notification.notifiedAt).getTime();
+      if (Number.isNaN(notifiedAtMs) || notifiedAtMs < sessionStartedAt) return false;
+      const key = `${notification.id}:${notification.notifiedAt}`;
+      return !seenKeys.has(key);
+    });
 
-    if (!baselineIds) {
-      pendingCompletionBaselineRef.current = [...currentPendingIds];
-      return;
-    }
-
-    const baselineSet = new Set(baselineIds);
-    const newlyPendingIds = currentPendingIds.filter((meetingId) => !baselineSet.has(meetingId));
-
-    newlyPendingIds.forEach((meetingId) => {
+    notificationsToDisplay.forEach((pendingNotification) => {
+      const meetingId = pendingNotification.id;
+      const key = `${pendingNotification.id}:${pendingNotification.notifiedAt}`;
       const meeting = meetingEntries.find((entry) => entry.id === meetingId);
       const title = meeting?.filename || 'Scheduled meeting needs follow-up';
       const timeLabel = formatNotificationMeetingTimeRange(
-        meeting?.meetingStartAt,
-        meeting?.meetingEndAt,
-        meeting?.uploadedAt
+        meeting?.meetingStartAt || pendingNotification.meetingStartAt,
+        meeting?.meetingEndAt || pendingNotification.meetingEndAt,
+        meeting?.uploadedAt || pendingNotification.uploadedAt
       );
-      const notification = new Notification('Meeting marked incomplete', {
+      const browserNotification = new Notification('Meeting marked incomplete', {
         body: `${title}${timeLabel ? ` • ${timeLabel}` : ''}. Add a recording, written notes, or a voice note in AcestarAI.`,
         tag: `meeting-incomplete-${meetingId}`,
         renotify: false
       });
 
-      notification.onclick = () => {
+      browserNotification.onclick = () => {
         window.focus();
         setActiveTab('meetings');
-        notification.close();
+        browserNotification.close();
       };
+
+      seenKeys.add(key);
     });
 
-    pendingCompletionBaselineRef.current = [...currentPendingIds];
+    localStorage.setItem('browser_notifications_seen', JSON.stringify(Array.from(seenKeys).slice(-200)));
   }, [
-    pendingCompletionMeetingIds,
+    pendingCompletionNotifications,
     meetingEntries,
     browserNotificationsEnabled,
     browserNotificationPermission,
@@ -359,6 +366,7 @@ function MainApp() {
       setBrowserNotificationPermission(permission);
       if (permission === 'granted') {
         localStorage.setItem('browser_notifications_enabled', 'true');
+        browserNotificationSessionStartRef.current = new Date().toISOString();
         setBrowserNotificationsEnabled(true);
         new Notification('Browser notifications enabled', {
           body: 'AcestarAI will notify you after scheduled meetings end and still need a recording or notes.'

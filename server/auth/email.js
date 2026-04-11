@@ -16,6 +16,13 @@ export function validateEmailAddress(email) {
   return emailRegex.test(email);
 }
 
+export function isBlockedLegacyEmail(email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!normalizedEmail.includes('@')) return false;
+  const domain = normalizedEmail.split('@').pop();
+  return domain === 'ibm.com' || domain === 'us.ibm.com' || domain.endsWith('.ibm.com');
+}
+
 export function buildVerificationLink(code) {
   return `${APP_URL}/api/auth/verify?token=${encodeURIComponent(code)}`;
 }
@@ -54,6 +61,11 @@ function getTransporter() {
 }
 
 async function sendEmail({ to, subject, text, html, fallbackLogLines }) {
+  if (isBlockedLegacyEmail(to)) {
+    console.warn(`Skipping outbound email to blocked legacy domain recipient: ${to}`);
+    return { delivered: false, fallback: false, skipped: true, reason: 'blocked_legacy_domain' };
+  }
+
   const transporter = getTransporter();
 
   if (!transporter) {
